@@ -63,6 +63,9 @@ class _Track:
     nose_since: float | None = None      # nose-down in one spot (sniffing/eating hidden food)
     nose_last: float = 0.0
     nose_center: tuple | None = None
+    fight_since: float | None = None
+    fight_last: float = 0.0
+    alert_reason: str = ""
     box: tuple | None = None             # last box (used to hand state over on tracker ID switches)
 
 
@@ -77,12 +80,15 @@ class RiskEngine:
         self.chew_conf = float(r.get("chew_conf", 0.35))
         self.mouth_thr = float(r.get("mouth_threshold", 0.65))       # with head/jaw motion
         self.mouth_alone = float(r.get("mouth_alone_threshold", 0.85))  # without a chew label
-        self.chew_min_s = float(r.get("chew_min_seconds", 2.0))
+        self.chew_min_s = float(r.get("chew_min_seconds", 5.0))      # user: notify after 5-10 s
         self.chew_head = float(r.get("chew_head_threshold", 0.35))
         self.eat_thr = float(r.get("eat_score_threshold", 0.36))
         self.selfcare_max = float(r.get("self_care_max_score", 0.45))
-        self.nose_down_s = float(r.get("nose_down_seconds", 4.0))
-        self.chew_danger_s = float(r.get("chew_danger_seconds", 10))
+        self.nose_down_s = float(r.get("nose_down_seconds", 6.0))
+        self.fight_thr = float(r.get("fight_threshold", 0.5))
+        self.fight_min_s = float(r.get("fight_min_seconds", 3.0))
+        self.fight_danger_s = float(r.get("fight_danger_seconds", 8.0))
+        self.chew_danger_s = float(r.get("chew_danger_seconds", 15))
         self.cooldown = {2: float(r.get("cooldown_warning", 20)), 3: float(r.get("cooldown_danger", 5))}
         self.vocab_tiers = {str(k): int(v) for k, v in (cfg.get("hazards") or {}).items()}
         self.tracks: dict[int, _Track] = {}
@@ -91,7 +97,9 @@ class RiskEngine:
 
     # ------------------------------------------------------------------
     def update(self, dogs, hazards, zones, frame_size, now: float | None = None,
-               hazards_fresh: bool = True, actions: dict | None = None) -> list[Assessment]:
+               hazards_fresh: bool = True, actions: dict | None = None,
+               pairs: dict | None = None) -> list[Assessment]:
+        """pairs: track_id -> (other_track_id, fight_score 0..1) for dogs touching each other."""
         now = time.monotonic() if now is None else now
         w, h = frame_size
         owner = {}                                   # hazard index -> nearest dog track_id
@@ -220,6 +228,21 @@ class RiskEngine:
                         in_mouth = name
                         add(3 if tier >= 3 else 2, f"the {name} disappeared near its mouth")
 
+            # ---------- rough play / fighting (two dogs tangled + vigorous + CLIP says fighting) ----------
+            pr = (pairs or {}).get(tid)
+            fight_now = pr is not None and pr[1] >= self.fight_thr
+            if fight_now:
+                tr.fight_last = now
+                tr.fight_since = tr.fight_since or now
+            elif tr.fight_since and now - tr.fight_last > 1.5:
+                tr.fight_since = None
+            if tr.fight_since is not None:
+                dur = now - tr.fight_since
+                if dur >= self.fight_danger_s:
+                    add(3, "fighting - separate them")
+                elif dur >= self.fight_min_s:
+                    add(2, "playing rough - may turn into a fight")
+
             # ---------- behaviour rules ----------
             if chewing and calm_zone and not any(hz.tier >= 2 for hz in near) and not in_mouth:
                 pass                                         # eating at the bowl / chewing toys: normal
@@ -247,6 +270,10 @@ class RiskEngine:
             if reasons and raw > 0:
                 reasons.sort(key=lambda r: -r[0])
                 reason = reasons[0][1]
+                if raw >= level:
+                    tr.alert_reason = reason
+            elif level >= 2 and tr.alert_reason:
+                reason = tr.alert_reason                     # level still cooling down: keep the real cause
             elif chewing and calm_zone:
                 reason = ("eating " if zone_hit.type == "food" else "chewing ") + zone_phrase(zone_hit)
             elif label in CALM_TEXT:
@@ -286,7 +313,10 @@ class RiskEngine:
         now = time.monotonic() if now is None else now
         if not assessments:
             return None
-        top = max(assessments, key=lambda a: a.level)
+        live = [a for a in assessments if a.raw_level >= a.level]   # only alert while the cause is still happening
+        if not live:
+            return None
+        top = max(live, key=lambda a: a.level)
         if top.level < 2 or now - self._last_alert[top.level] < self.cooldown[top.level]:
             return None
         self._last_alert[top.level] = now

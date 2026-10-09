@@ -38,10 +38,27 @@ class DogDetector:
         self.model.predict(np.zeros((imgsz, imgsz, 3), dtype=np.uint8), device=device,
                            half=self.half, verbose=False)
 
+    @staticmethod
+    def _overlap(a, b) -> float:
+        """Intersection over the SMALLER box (1.0 = one box sits inside the other)."""
+        ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+        iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+        inter = ix * iy
+        small = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1])) or 1
+        return inter / small
+
+    def _dedupe(self, dogs: list[Dog]) -> list[Dog]:
+        """One dog sometimes gets two boxes (whole body + half body). Keep the bigger/surer one."""
+        keep: list[Dog] = []
+        for d in sorted(dogs, key=lambda x: (x.conf, (x.box[2] - x.box[0]) * (x.box[3] - x.box[1])), reverse=True):
+            if all(self._overlap(d.box, k.box) < 0.6 for k in keep):
+                keep.append(d)
+        return keep
+
     def __call__(self, frame: np.ndarray) -> list[Dog]:
         import time
         now = time.monotonic()
-        raw = self._detect(frame)
+        raw = self._dedupe(self._detect(frame))
         out = []
         for d in raw:
             prev = self._last.get(d.track_id)
@@ -55,8 +72,8 @@ class DogDetector:
         for tid, (d, t) in list(self._last.items()):
             if tid in seen:
                 continue
-            if now - t <= self.hold_seconds:
-                out.append(d)                      # briefly missed: keep showing it
+            if now - t <= self.hold_seconds and all(self._overlap(d.box, o.box) < 0.5 for o in out):
+                out.append(d)                      # briefly missed: keep showing it (if not a duplicate)
             else:
                 self._last.pop(tid)
         return out

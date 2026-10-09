@@ -97,7 +97,7 @@ def main() -> None:
     print("[5/5] Whisper speech recognition (Ask Bantay)")
     try:
         import whisper
-        whisper.load_model(cfg.get("qa", {}).get("whisper_model", "base"), device="cpu",
+        whisper.load_model(cfg.get("qa", {}).get("whisper_model", "base.en"), device="cpu",
                            download_root=str(config.MODELS_DIR / "whisper"))
         print("  whisper model cached in models/whisper")
     except Exception as e:

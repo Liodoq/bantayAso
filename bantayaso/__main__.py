@@ -48,6 +48,7 @@ def run_cv(args) -> None:
     pipe = Pipeline(cfg, use_hazards=not args.no_hazards, use_actions=not args.no_actions,
                     use_vlm=not args.no_vlm)
     pipe.show_debug = args.debug
+    pipe.zone_help = True
     rec = ClipRecorder(config.DATA_DIR / "clips", seconds=cfg.get("capture", {}).get("buffer_seconds", 10),
                        fps=cfg.get("capture", {}).get("record_fps", 15))
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)

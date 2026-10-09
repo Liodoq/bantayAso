@@ -12,7 +12,7 @@ python -m bantayaso --source data\clips\rec_YYYYMMDD_HHMMSS.mp4   # test on a re
 python -m bantayaso --cv                    # simple OpenCV developer window
 python -m bantayaso --source http://<phone-ip>:8080/video   # phone as a wireless camera (IP Webcam app)
 ```
-Desktop app: **F12** shows technical info on the video. Closing the window keeps it running in the tray (right-click the paw icon → Quit).
+Desktop app pages: Monitor · Events · Dogs · Zones · Things · Settings. **F2** = ask Bantay by voice, **F12** = technical info on the video. Top bar: ● Record clip, 🎙 Bantay ▾ (ask, hands-free, voice, do not disturb, snooze), ☰ (light/dark mode, tray, quit). Closing the window keeps it running in the tray (right-click the paw icon → Quit).
 
 OpenCV window keys: **R** record · **C** save last 10 s · **S** snapshot · **Z** zones · **H** object boxes · **M** mute · **N** do not disturb · **D** debug · **Q** quit
 

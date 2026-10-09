@@ -44,6 +44,12 @@ class Pipeline:
         al = cfg.get("alerts", {})
         log(f"[BantayAso] inference device: {self.device}")
 
+        try:                                   # ultralytics 8.4 warns "'half' is deprecated" every frame
+            import logging
+            from ultralytics.utils import LOGGER as _ULOG
+            _ULOG.setLevel(logging.ERROR)
+        except Exception:
+            pass
         from .detect_dog import DogDetector
         log("[BantayAso] loading dog detector...")
         self.dog_det = DogDetector(config.MODELS_DIR / cfg["models"]["dog_detector"], device=self.device,
@@ -83,9 +89,11 @@ class Pipeline:
         if qa.get("enabled", True):
             try:
                 from .voice_in import Listener
-                self.listener = Listener(config.MODELS_DIR, model=qa.get("whisper_model", "base"),
+                self.listener = Listener(config.MODELS_DIR, model=qa.get("whisper_model", "base.en"),
                                          language=qa.get("language", "en") or None,
                                          is_speaking=lambda: self.speaker.speaking, log=log)
+                import threading as _th
+                _th.Thread(target=lambda: self.listener and self.listener._load(), daemon=True).start()
             except Exception as e:                # pragma: no cover
                 log(f"[BantayAso] voice questions unavailable: {e}")
         self.motion = MotionMeter()
@@ -93,22 +101,24 @@ class Pipeline:
         self.editor = ZoneEditor(self.zones)
         self.engine = RiskEngine(cfg)
         self.events = EventLog(config.DATA_DIR / "events.db", config.DATA_DIR / "snapshots")
-        self.speaker = Speaker()
+        self.speaker = Speaker(rate=int(al.get("voice_rate", 1)), voice=al.get("voice_name", ""))
         self.voice = bool(al.get("voice", True))
         self.dnd = bool(al.get("do_not_disturb", False))
         self.toasts = bool(al.get("toast", True))
         self.speak_vlm = bool(al.get("speak_vlm", True))
         self.owner_clip = al.get("owner_voice_clip", "")
-        self.dog_name = cfg.get("dog_name", "") or "your dog"
+        self.dog_name = "your dog"           # each dog's own name comes from the Dogs page
 
         self.hazard_every = int(det.get("hazard_every", 5))
         self.action_every = float(det.get("action_every_seconds", 0.25))
         self.show_hazards, self.show_debug = True, False
+        self.zone_help = False                 # OpenCV window sets True (the app has its own instructions)
         self.state = State()
         self._hazards, self._actions, self._zoom = [], {}, []
         self._n, self._last_act, self._last_zoom, self._last_seen = 0, 0.0, 0.0, 0.0
         self._fps_n, self._fps_t = 0, time.perf_counter()
         self.on_event = None                # optional callback(event_dict) for the UI
+        self._pending_vocab = None
 
     # ------------------------------------------------------------------
     def save_zones(self) -> None:
@@ -116,8 +126,44 @@ class Pipeline:
         latest["zones"] = zones_to_cfg(self.zones)
         config.save(latest)
 
+    def _pairs(self, frame, dogs, now) -> dict:
+        """Dogs whose boxes touch and are both moving get a CLIP 'fighting?' score (~3 per second)."""
+        if self.classifier is None or len(dogs) < 2:
+            self._pair_cache = {}
+            return {}
+        if now - getattr(self, "_last_pair", 0.0) < 0.33:
+            return getattr(self, "_pair_cache", {})
+        self._last_pair = now
+        from .detect_dog import DogDetector
+        out = {}
+        moving = {tid for tid, r in self._actions.items() if r.motion in ("active", "frantic")}
+        for i, a in enumerate(dogs):
+            for b in dogs[i + 1:]:
+                touching = DogDetector._overlap(a.box, b.box) > 0.15
+                if not touching or not ({a.track_id, b.track_id} <= moving):
+                    continue
+                sc = self.classifier.pair_score(frame, a.box, b.box)
+                for x, y in ((a, b), (b, a)):
+                    if sc > out.get(x.track_id, (None, 0.0))[1]:
+                        out[x.track_id] = (y.track_id, sc)
+        self._pair_cache = out
+        return out
+
+    def request_vocab(self, vocab: dict) -> None:
+        """Things page: apply a new object list on the next frame (pipeline thread)."""
+        self._pending_vocab = dict(vocab)
+
     def process(self, frame: np.ndarray) -> tuple[np.ndarray, State]:
         st = self.state
+        if self._pending_vocab is not None:
+            v, self._pending_vocab = self._pending_vocab, None
+            self.engine.vocab_tiers = {str(k): int(x) for k, x in v.items()}
+            if self.hazard_det is not None:
+                try:
+                    self.hazard_det.update_vocab(v)
+                    self.log(f"[BantayAso] object list updated ({sum(1 for x in v.values() if x > 0)} things)")
+                except Exception as e:
+                    self.log(f"[BantayAso] could not update the object list: {e}")
         h, w = frame.shape[:2]
         now = time.monotonic()
         t0 = time.perf_counter()
@@ -158,8 +204,9 @@ class Pipeline:
             self._last_zoom = now
         hz = self._hazards + [z for z in self._zoom if not any(z.name == x.name for x in self._hazards)]
 
+        pairs = self._pairs(frame, dogs, now)
         found = self.engine.update(dogs, hz, self.zones, (w, h), hazards_fresh=fresh,
-                                   actions=self._actions if self.classifier else None)
+                                   actions=self._actions if self.classifier else None, pairs=pairs)
         names = {}
         if self.registry is not None:
             for old, new in self.engine.handovers:
@@ -206,7 +253,8 @@ class Pipeline:
         view = frame.copy()
         overlay.reset_labels()
         self.editor.size = (w, h)
-        overlay.draw_zones(view, self.zones, self.editor)
+        if self.editor.active:                 # zones are only drawn while you edit them
+            overlay.draw_zones(view, self.zones, self.editor, help_bar=self.zone_help)
         if self.show_hazards:
             overlay.draw_hazards(view, hz)
         overlay.draw_dogs(view, dogs, {a.track_id: a for a in found}, names)

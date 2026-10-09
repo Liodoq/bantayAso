@@ -68,7 +68,7 @@ def draw_hazards(img, hazards):
         label(img, f"{hz.name} {hz.conf:.2f}", x1, y2 + 22, color)
 
 
-def draw_zones(img, zones, editor=None):
+def draw_zones(img, zones, editor=None, help_bar: bool = True):
     h, w = img.shape[:2]
     layer = img.copy()
     for z in zones:
@@ -88,6 +88,8 @@ def draw_zones(img, zones, editor=None):
             cv2.circle(img, p, 5, C["caramel"], -1)
         if len(pts) > 1:
             cv2.polylines(img, [np.array(pts, np.int32)], False, C["caramel"], 2, cv2.LINE_AA)
+    if editor is not None and editor.active and help_bar:
+        h, w = img.shape[:2]
         help_ = (f"ZONE EDIT - type: {editor.type.upper()}  |  click: add point  right-click/ENTER: finish  "
                  "1 trash 2 danger 3 no-go 4 bed 5 food 6 play  BACKSPACE: undo  X: delete last  Z: save & exit")
         cv2.rectangle(img, (0, h - 34), (w, h), C["bg"], -1)

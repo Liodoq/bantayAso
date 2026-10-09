@@ -32,17 +32,28 @@ class HazardDetector:
         self._prev: list[Hazard] = []
         self.half = device.startswith("cuda")
         self.model = YOLO(str(weights))
+        self.weights = Path(weights)
+        self._set_vocab()
+        self.model.predict(np.zeros((imgsz, imgsz, 3), dtype=np.uint8), device=device,
+                           half=self.half, verbose=False)
+
+    def _set_vocab(self) -> None:
         cwd = os.getcwd()
-        os.chdir(Path(weights).parent)           # text encoder is cached next to the weights
+        os.chdir(self.weights.parent)            # text encoder is cached next to the weights
         try:
-            if "yoloe" in Path(weights).name:
+            if "yoloe" in self.weights.name:
                 self.model.set_classes(self.names, self.model.get_text_pe(self.names))
             else:
                 self.model.set_classes(self.names)
         finally:
             os.chdir(cwd)
-        self.model.predict(np.zeros((imgsz, imgsz, 3), dtype=np.uint8), device=device,
-                           half=self.half, verbose=False)
+
+    def update_vocab(self, vocab: dict) -> None:
+        """Change the object list live (Things page). Runs on the pipeline thread."""
+        self.vocab = {str(k): int(v) for k, v in vocab.items()}
+        self.names = list(self.vocab.keys())
+        self._prev = []
+        self._set_vocab()
 
     def detect_crop(self, frame: np.ndarray, box, conf: float | None = None) -> list[Hazard]:
         """Mouth zoom: run on an enlarged crop around a dog and map boxes back to the frame.

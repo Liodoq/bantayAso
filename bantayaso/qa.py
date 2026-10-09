@@ -29,27 +29,35 @@ def _fuzzy_first_words(text: str) -> int:
         return 0
     one = words[0].lower()
     two = (words[0] + words[1]).lower() if len(words) > 1 else one
-    if difflib.SequenceMatcher(None, two, "bantay").ratio() >= 0.72 and len(words) > 1:
-        return 2
-    if difflib.SequenceMatcher(None, one, "bantay").ratio() >= 0.72:
+    if (len(words) > 1 and one[:1] in "bvpm" and len(one) <= 4
+            and difflib.SequenceMatcher(None, two, "bantay").ratio() >= 0.72):
+        return 2                                 # "Van Ty", "Ban tai", "Bun tie"
+    if one[:1] in "bvpm" and difflib.SequenceMatcher(None, one, "bantay").ratio() >= 0.72:
         return 1
     return 0
 
 
-def strip_wake(text: str) -> tuple[bool, str]:
-    """Detect the wake word (tolerating mis-hearings) and remove it from the question."""
+def strip_wake(text: str, strict: bool = False) -> tuple[bool, str]:
+    """Detect the wake word (tolerating mis-hearings) and remove it from the question.
+    strict=True (hands-free): only counts when the sentence STARTS with the wake word."""
     t = text.strip()
-    m = WAKE.search(t)
-    if m:
-        return True, t[m.end():].strip(" ,.!?") if m.start() == 0 else (t[:m.start()] + t[m.end():]).strip(" ,.!?")
-    m = WAKE_ANYWHERE.search(t)
-    if m:
-        return True, (t[:m.start()] + t[m.end():]).strip(" ,.!?")
-    n = _fuzzy_first_words(t)
-    if n:
-        rest = re.split(r"[\s,]+", t, maxsplit=n)
-        return True, (rest[n] if len(rest) > n else "").strip(" ,.!?")
-    return False, t
+    woke = False
+    for _ in range(3):                       # "Bantay, Bantay, ..." -> strip repeats
+        m = WAKE.search(t)
+        if m and m.start() == 0:
+            t, woke = t[m.end():].strip(" ,.!?"), True
+            continue
+        n = _fuzzy_first_words(t)
+        if n:
+            rest = re.split(r"[\s,]+", t, maxsplit=n)
+            t, woke = (rest[n] if len(rest) > n else "").strip(" ,.!?"), True
+            continue
+        break
+    if not woke and not strict:
+        m = WAKE_ANYWHERE.search(t)
+        if m:
+            t, woke = (t[:m.start()] + t[m.end():]).strip(" ,.!?"), True
+    return woke, t
 
 
 def parse_minutes(q: str, default: int = 1) -> int:
@@ -145,7 +153,7 @@ def _today_text(pipe) -> str:
 
 
 SCOPE_WORDS = (r"\bdogs?\b|\bpupp?(y|ies)\b|\baso\b|\baso(ng)?\b|\bpets?\b|\bhe\b|\bshe\b|\bhim\b|\bher\b|\bthey\b|"
-               r"\bthem\b|\bit\b|siya|sila|doing|happen|eat|chew|bite|bit|sleep|lying|sit|stand|walk|play|"
+               r"\bthem\b|\bit\b|siya|sila|doing|happen|fight|rough|away|eat|chew|bite|bit|sleep|lying|sit|stand|walk|play|"
                r"lick|scratch|dig|sniff|bark|where|nasaan|asan|how many|ilan|alert|warning|danger|safe|okay|"
                r"\bok\b|wrong|problem|today|minute|minuto|second|timeline|when|bed|trash|sofa|bowl|zone|"
                r"camera|battery|cable|toy|food|mouth|swallow|ginagawa|kumain|natutulog|bantay")
@@ -162,6 +170,96 @@ def in_scope(q: str, known_names=()) -> bool:
     if any(n.lower() in ql for n in known_names):
         return True
     return re.search(SCOPE_WORDS, ql) is not None
+
+
+ACT_WORDS = {"sleep": "sleeping", "eat": "eating", "chew": "chewing", "sit": "sitting", "lying": "lying",
+             "lie": "lying", "lay": "lying", "stand": "standing", "walk": "walking", "lick": "licking",
+             "scratch": "scratching", "dig": "digging", "sniff": "sniffing", "play": "chewing", "fight": "fight", "rough": "fight"}
+
+
+def _act_in(q: str) -> str | None:
+    for k, v in ACT_WORDS.items():
+        if re.search(rf"\b{k}", q):
+            return v
+    return None
+
+
+def _current(st, names, default):
+    out = []
+    for a in st.assessments:
+        who = names.get(a.track_id) or (default if len(st.assessments) == 1 else "one of your dogs")
+        out.append((who, a.reason.split(" - ")[0], a))
+    return out
+
+
+def _yes_no(q, st, names, default, subject) -> str | None:
+    """'Is Oreo sleeping?' / 'Are my dogs eating?' -> answered from the live state."""
+    if not re.match(r"^(is|are|was|were|does|do)\b", q):
+        return None
+    act = _act_in(q)
+    if not act:
+        return None
+    cur = [c for c in _current(st, names, default) if not subject or c[0] == subject]
+    if not cur:
+        return f"I don't see {subject or 'any dog'} right now."
+    hits = [c for c in cur if act in c[1] or (act == "eating" and "chewing" in c[1])]
+    if hits:
+        who = ", ".join(c[0] for c in hits)
+        return f"Yes, {who} {'is' if len(hits) == 1 else 'are'} {hits[0][1]}."
+    who, doing, _ = cur[0]
+    return f"No. {who[0].upper() + who[1:]} is {doing if doing not in ('all calm',) else 'calm'} right now."
+
+
+def _who_is(q, st, names, default) -> str | None:
+    """'Which dog is eating?' / 'Who is on the bed?'"""
+    if not re.search(r"^(who|which dog|which one|sino)", q):
+        return None
+    act = _act_in(q)
+    place = re.search(r"\b(bed|trash|sofa|bowl|food|danger|play)\b", q)
+    cur = _current(st, names, default)
+    hits = [c for c in cur if (act and act in c[1]) or (place and place.group(1) in (c[2].zone or "").lower() + c[1])]
+    if not hits:
+        return "None of them right now." if cur else "I don't see any dog right now."
+    who = [c[0] for c in hits]
+    return f"{', '.join(who)} {'is' if len(who) == 1 else 'are'} {hits[0][1]}."
+
+
+def _how_long(q, pipe, subject, default) -> str | None:
+    if not re.search(r"how long|gaano katagal", q):
+        return None
+    segs = pipe.history.segments(10, subject)
+    if not segs:
+        return f"I haven't seen {subject or 'your dogs'} in the last 10 minutes."
+    st_, en, w, act, _z = segs[-1]
+    who = default if w == "unnamed" else w
+    return f"{who[0].upper() + who[1:]} has been {act} for about {fmt_dur(en - st_)}."
+
+
+def _last_time(q, pipe, subject, default) -> str | None:
+    """'When did Oreo last eat?'"""
+    if not re.search(r"\blast\b.*\b(eat|ate|chew|sleep|slept|drink|play)|\b(eat|ate|chew|sleep|slept)\b.*\blast\b", q):
+        return None
+    act = _act_in(q.replace("ate", "eat").replace("slept", "sleep")) or "eating"
+    segs = [x for x in pipe.history.segments(10, subject) if act in x[3] or (act == "eating" and "chewing" in x[3])]
+    if not segs:
+        return f"I haven't seen {subject or 'your dogs'} {act} in the last 10 minutes."
+    st_, en, w, a, _z = segs[-1]
+    who = default if w == "unnamed" else w
+    ago = max(0, time.time() - en)
+    when = "just now" if ago < 20 else f"about {fmt_dur(ago)} ago"
+    return f"{who[0].upper() + who[1:]} was {a} {when}, for about {fmt_dur(en - st_)}."
+
+
+def _last_alert(q, pipe) -> str | None:
+    if not re.search(r"(last|latest|recent) (alert|warning|danger)", q):
+        return None
+    ev = pipe.events.today(1)
+    if not ev:
+        return "There haven't been any alerts today."
+    e = ev[0]
+    t = time.strftime("%I:%M %p", time.localtime(e["ts"])).lstrip("0")
+    who = e["dog"] if e["dog"] and not str(e["dog"]).lstrip("-").isdigit() else "a dog"
+    return f"The last alert was {'a danger' if e['level'] == 3 else 'a warning'} at {t}: {who} {e['reason'].split(' - ')[0]}."
 
 
 def answer(question: str, pipe) -> str:
@@ -192,6 +290,12 @@ def answer(question: str, pipe) -> str:
     if subject is None and re.search(r"\b(he|him|his|she|her|it|siya|niya)\b", ql):
         subject = getattr(pipe, "_last_subject", None)
     pipe._last_subject = subject or getattr(pipe, "_last_subject", None)
+    for fn in (lambda: _yes_no(ql, st, names, default, subject), lambda: _who_is(ql, st, names, default),
+               lambda: _how_long(ql, pipe, subject, default), lambda: _last_time(ql, pipe, subject, default),
+               lambda: _last_alert(ql, pipe)):
+        r = fn()
+        if r:
+            return r
     if re.search(r"\btoday\b|ngayong araw|since (this )?morning|whole day", ql):
         return _today_text(pipe)
     if re.search(r"\bwhen\b|timeline|what time|step by step|sequence|anong oras", ql):

@@ -24,11 +24,18 @@ class Worker(QThread):
         self.running = True
         self.debug = bool(getattr(args, "debug", False))
         self._req = set()                       # "record", "last", "snapshot"
+        self._new_source = None
+        self.source = None
+        self.camera_ok = True
         self.recording = False
         self.started_at = time.time()
 
     def request(self, what: str) -> None:
         self._req.add(what)
+
+    def switch_source(self, source) -> None:
+        """Use another camera (USB index, video file or stream URL) without restarting."""
+        self._new_source = source
 
     def stop(self) -> None:
         self.running = False
@@ -39,8 +46,12 @@ class Worker(QThread):
         cfg = config.load()
         cam = cfg.get("camera", {})
         source = self.args.source if self.args.source is not None else cam.get("index", 0)
-        src = FrameSource(source, backend=cam.get("backend", "msmf"), width=cam.get("width", 1280),
-                          height=cam.get("height", 720), fps=cam.get("fps", 30)).start()
+        self.source = source
+
+        def open_src(s_):
+            return FrameSource(s_, backend=cam.get("backend", "msmf"), width=cam.get("width", 1280),
+                               height=cam.get("height", 720), fps=cam.get("fps", 30)).start()
+        src = open_src(source)
         self.message.emit("Loading the local AI models...")
         try:
             self.pipe = Pipeline(cfg, use_hazards=not self.args.no_hazards,
@@ -55,19 +66,42 @@ class Worker(QThread):
                            fps=cfg.get("capture", {}).get("record_fps", 15))
         self.started_at = time.time()
         self.ready.emit()
-        last_id = 0
+        last_id, last_frame_t = 0, time.monotonic()
         try:
             while self.running:
+                if self._new_source is not None:
+                    new, self._new_source = self._new_source, None
+                    src.stop()
+                    src = open_src(new)
+                    self.source, last_id, last_frame_t = new, 0, time.monotonic()
+                    self.message.emit(f"Switched camera to {new}")
                 fid, frame = src.read()
                 if frame is None or fid == last_id:
-                    if frame is None and not src.connected:
-                        self.message.emit("Camera disconnected - reconnecting...")
+                    if time.monotonic() - last_frame_t > 4 and self.camera_ok:
+                        self.camera_ok = False
+                        self.message.emit("CAMERA_LOST")
                     self.msleep(5)
                     continue
+                if not self.camera_ok:
+                    self.camera_ok = True
+                    self.message.emit("CAMERA_OK")
+                last_frame_t = time.monotonic()
                 last_id = fid
                 rec.push(frame)
                 self._handle_requests(rec, frame)
-                view, st = self.pipe.process(frame)
+                try:
+                    view, st = self.pipe.process(frame)
+                except Exception:                   # one bad frame must never stop the watcher
+                    import traceback
+                    err = traceback.format_exc()
+                    print(err)
+                    try:
+                        with open(config.DATA_DIR / "crash.log", "a", encoding="utf-8") as f:
+                            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} frame error\n{err}")
+                    except OSError:
+                        pass
+                    self.msleep(50)
+                    continue
                 overlay.draw_recording(view, rec.is_recording)
                 if self.debug:
                     overlay.draw_debug(view, self.pipe.debug_lines())

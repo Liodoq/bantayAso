@@ -126,3 +126,5 @@ detect:
 dog_name: Oreo
 qa:
   hands_free: true
+ui:
+  theme: light

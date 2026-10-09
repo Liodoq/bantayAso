@@ -28,8 +28,38 @@ def apply(name: str = "dark") -> None:
     QSS = build_qss()
 
 
+def _svg(name: str, body: str) -> str:
+    """QSS can only show images from files: write tiny SVG icons once to the temp folder."""
+    import os
+    import tempfile
+    d = os.path.join(tempfile.gettempdir(), "bantayaso_ui")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, name + ".svg")
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write(body)
+    return path.replace("\\", "/")
+
+
+def _arrow(color: str) -> str:
+    return _svg(f"chev_{color.strip('#')}",
+                f'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8">'
+                f'<path d="M1 1.5l5 5 5-5" fill="none" stroke="{color}" stroke-width="1.8" '
+                f'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+
+
+def _check(color: str) -> str:
+    return _svg(f"check_{color.strip('#')}",
+                f'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="10" viewBox="0 0 12 10">'
+                f'<path d="M1.5 5.2l3.2 3.1L10.5 1.8" fill="none" stroke="{color}" stroke-width="2" '
+                f'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+
+
 def build_qss() -> str:
     g = globals()
+    chev = _arrow(g["CARAMEL"])
+    chev_m = _arrow(g["MUTED"])
+    check = _check(g["ON_ACCENT"])
     side_text = "#EADBC8" if NAME == "light" else g["MUTED"]       # light theme: dark-brown sidebar
     side_active = "#5A3D2A" if NAME == "light" else g["RAISED"]
     return f"""
@@ -43,37 +73,76 @@ QLabel#muted {{ color: {g['MUTED']}; font-size: 9pt; }}
 QLabel#faint {{ color: {g['FAINT']}; font-size: 9pt; }}
 QLabel#h1 {{ font-size: 15pt; font-weight: 600; }}
 QLabel#h3 {{ color: {g['MUTED']}; font-size: 8pt; font-weight: 600; letter-spacing: 1px; }}
-QPushButton#nav {{ text-align: left; padding: 9px 12px; border: none; border-radius: 8px;
+QPushButton#nav {{ text-align: left; padding: 10px 16px; font-size: 10.5pt; border: none; border-radius: 8px;
                    color: {side_text}; background: transparent; }}
 QPushButton#nav:hover {{ color: #FFFFFF; background: {side_active}; }}
 QPushButton#nav:checked {{ background: {side_active}; color: #FFFFFF; border-left: 3px solid {g['CARAMEL']}; }}
 QPushButton#nav:pressed {{ background: {g['BROWN']}; }}
 QFrame#card {{ background: {g['PANEL']}; border: 1px solid {g['LINE']}; border-radius: 14px; }}
-QPushButton {{ background: {g['RAISED']}; border: 1px solid {g['LINE']}; border-radius: 9px; padding: 8px 12px; }}
+QPushButton {{ background: {g['RAISED']}; border: 1px solid {g['LINE']}; border-radius: 9px; padding: 8px 14px; min-height: 20px; }}
 QPushButton:hover {{ border-color: {g['CARAMEL']}; }}
 QPushButton:pressed {{ background: {g['LINE']}; border-color: {g['CARAMEL']}; padding-top: 10px; padding-bottom: 6px; }}
 QPushButton:disabled {{ color: {g['FAINT']}; border-color: {g['LINE']}; }}
 QPushButton#primary {{ background: {g['CARAMEL']}; color: {g['ON_ACCENT']}; border-color: {g['CARAMEL']}; font-weight: 600; }}
 QPushButton#primary:hover {{ background: {g['BROWN']}; border-color: {g['BROWN']}; color: #FFFFFF; }}
 QPushButton#primary:pressed {{ background: {g['BROWN']}; padding-top: 10px; padding-bottom: 6px; }}
-QPushButton#pill {{ border-radius: 14px; padding: 5px 12px; color: {g['MUTED']}; background: {g['PANEL']}; }}
+QPushButton#pill {{ border-radius: 15px; padding: 5px 14px; min-height: 18px; color: {g['MUTED']}; background: {g['PANEL']}; }}
+QPushButton#pill[menu="true"] {{ padding-right: 30px; }}
+QPushButton::menu-indicator {{ image: url("{chev_m}"); width: 10px; height: 7px; subcontrol-origin: padding;
+                               subcontrol-position: center right; right: 12px; }}
 QPushButton#pill:hover {{ color: {g['CREAM']}; border-color: {g['CARAMEL']}; }}
 QPushButton#pill:pressed {{ background: {g['LINE']}; padding-top: 7px; padding-bottom: 3px; }}
 QPushButton#pill:checked {{ color: {g['ON_ACCENT']}; background: {g['CARAMEL']}; border-color: {g['CARAMEL']}; font-weight: 600; }}
 QListWidget {{ background: transparent; border: none; outline: none; }}
 QListWidget::item {{ border-radius: 10px; padding: 6px; margin: 2px 0; }}
 QListWidget::item:hover {{ background: {g['INSET']}; }}
+QListWidget::item:disabled {{ background: transparent; border: none; color: {g['FAINT']}; }}
 QListWidget::item:selected {{ background: {g['RAISED']}; border: 1px solid {g['CARAMEL']}; color: {g['CREAM']}; }}
-QLineEdit, QSpinBox, QComboBox {{ background: {g['INSET']}; border: 1px solid {g['LINE']}; border-radius: 8px; padding: 6px; }}
+QLineEdit, QSpinBox, QComboBox {{ background: {g['INSET']}; border: 1px solid {g['LINE']}; border-radius: 9px;
+                                   padding: 7px 12px; min-height: 22px; }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {g['CARAMEL']}; }}
-QComboBox QAbstractItemView {{ background: {g['PANEL']}; selection-background-color: {g['RAISED']}; }}
-QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 4px; border: 1px solid {g['LINE']}; background: {g['INSET']}; }}
+QComboBox {{ padding: 7px 34px 7px 12px; min-height: 22px; combobox-popup: 0; }}
+QComboBoxPrivateContainer {{ background: transparent; border: none; padding: 0; margin: 0; }}
+QComboBox:hover {{ border-color: {g['CARAMEL']}; }}
+QComboBox:on {{ border-color: {g['CARAMEL']}; background: {g['RAISED']}; }}
+QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 30px; border: none; }}
+QComboBox::down-arrow {{ image: url("{chev}"); width: 12px; height: 8px; }}
+QComboBox QAbstractItemView {{ background: {g['PANEL']}; color: {g['CREAM']}; border: 1px solid {g['CARAMEL']};
+                               border-radius: 8px; padding: 4px; outline: none; }}
+QComboBox QAbstractItemView::item {{ min-height: 30px; padding: 4px 10px; border-radius: 6px; color: {g['CREAM']}; }}
+QComboBox QAbstractItemView::item:hover {{ background: {g['RAISED']}; }}
+QComboBox QAbstractItemView::item:selected {{ background: {g['CARAMEL']}; color: {g['ON_ACCENT']}; }}
+QTableWidget#things {{ background: {g['PANEL']}; alternate-background-color: {g['INSET']}; border: 1px solid {g['LINE']};
+                       border-radius: 10px; gridline-color: transparent; outline: none; font-size: 11pt; }}
+QTableWidget#things::item {{ padding: 0 12px; border: none; }}
+QTableWidget#things::item:hover {{ background: {g['RAISED']}; }}
+QTableWidget#things::item:selected {{ background: {g['RAISED']}; color: {g['CREAM']}; }}
+QHeaderView::section {{ background: {g['SURFACE']}; color: {g['MUTED']}; border: none; border-bottom: 1px solid {g['LINE']};
+                        padding: 8px 12px; font-size: 8pt; font-weight: 600; letter-spacing: 1px; }}
+QTableCornerButton::section {{ background: {g['SURFACE']}; border: none; }}
+QCheckBox {{ spacing: 10px; }}
+QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid {g['LINE']}; background: {g['INSET']}; }}
 QCheckBox::indicator:hover {{ border-color: {g['CARAMEL']}; }}
-QCheckBox::indicator:checked {{ background: {g['CARAMEL']}; border-color: {g['CARAMEL']}; }}
-QMenu {{ background: {g['PANEL']}; border: 1px solid {g['LINE']}; padding: 4px; }}
-QMenu::item {{ padding: 6px 18px; border-radius: 6px; }}
+QCheckBox::indicator:checked {{ background: {g['CARAMEL']}; border-color: {g['CARAMEL']}; image: url("{check}"); }}
+QMenu {{ background: {g['PANEL']}; border: 1px solid {g['LINE']}; border-radius: 12px; padding: 6px; }}
+QMenu::item {{ padding: 8px 22px 8px 14px; border-radius: 8px; color: {g['CREAM']}; }}
 QMenu::item:selected {{ background: {g['RAISED']}; }}
-QScrollArea {{ border: none; background: transparent; }}
+QMenu::item:disabled {{ color: {g['FAINT']}; }}
+QMenu::separator {{ height: 1px; background: {g['LINE']}; margin: 5px 8px; }}
+QMenu::indicator {{ width: 14px; height: 14px; left: 6px; }}
+QMenu::indicator:checked {{ image: url("{_check(g['CARAMEL'])}"); }}
+QScrollArea {{ border: none; background: {g['SURFACE']}; }}
+QScrollArea > QWidget > QWidget {{ background: {g['SURFACE']}; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; }}
+QScrollBar::handle:vertical {{ background: {g['LINE']}; border-radius: 5px; min-height: 30px; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; }}
+QScrollBar::handle:horizontal {{ background: {g['LINE']}; border-radius: 5px; min-width: 30px; }}
+QSlider::groove:horizontal {{ height: 6px; background: {g['RAISED']}; border-radius: 3px; }}
+QSlider::sub-page:horizontal {{ background: {g['CARAMEL']}; border-radius: 3px; }}
+QSlider::handle:horizontal {{ background: {g['BROWN']}; width: 16px; margin: -6px 0; border-radius: 8px; }}
+QMessageBox {{ background: {g['PANEL']}; }}
 QToolTip {{ background: {g['PANEL']}; color: {g['CREAM']}; border: 1px solid {g['LINE']}; }}
 """
 

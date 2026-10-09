@@ -50,6 +50,12 @@ PROMPTS = {
 }
 
 
+PAIR_FIGHT = ["a photo of two dogs fighting aggressively", "a photo of two dogs biting each other",
+              "a photo of two dogs wrestling roughly"]
+PAIR_CALM = ["a photo of two dogs lying calmly next to each other", "a photo of two dogs sleeping together",
+             "a photo of two dogs sitting side by side"]
+
+
 @dataclass
 class ActionResult:
     label: str            # smoothed top action, e.g. "chewing something"
@@ -89,6 +95,7 @@ class ActionClassifier:
                 rows.append(t / t.norm())
             self.t_act = torch.stack(rows)
             self.t_mouth = enc(MOUTH_POS + MOUTH_NEG)
+            self.t_pair = enc(PAIR_FIGHT + PAIR_CALM)
         self.chew_idx = [i for i, l in enumerate(self.labels) if l in ("chewing something", "eating")]
         self._chew: dict[int, float] = {}
         self._ema: dict[int, np.ndarray] = {}
@@ -115,6 +122,23 @@ class ActionClassifier:
         left = frame[max(0, y1 - pad):hy2, max(0, x1 - pad):x1 + int(0.6 * bw)]
         right = frame[max(0, y1 - pad):hy2, x2 - int(0.6 * bw):min(w, x2 + pad)]
         return [c for c in (full, left, right)]
+
+    def pair_score(self, frame, box_a, box_b) -> float:
+        """0..1: how much the crop around two touching dogs looks like fighting / rough play."""
+        from PIL import Image
+        h, w = frame.shape[:2]
+        x1, y1 = max(0, min(box_a[0], box_b[0]) - 10), max(0, min(box_a[1], box_b[1]) - 10)
+        x2, y2 = min(w, max(box_a[2], box_b[2]) + 10), min(h, max(box_a[3], box_b[3]) + 10)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return 0.0
+        torch = self.torch
+        with torch.no_grad():
+            x = self.preprocess(Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)))[None].to(self.device)
+            f = self.model.encode_image(x.type(self.model.dtype)).float()
+            f = f / f.norm(dim=-1, keepdim=True)
+            p = (100.0 * f @ self.t_pair.T).softmax(dim=-1)[0].cpu().numpy()
+        return float(p[:len(PAIR_FIGHT)].sum())
 
     def teach(self, tid: int, label: str, samples: int = 6) -> None:
         """Collect `samples` crops of this dog over the next moments as examples of `label`."""

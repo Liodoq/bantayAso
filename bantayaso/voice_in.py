@@ -2,7 +2,7 @@
 
 - push_to_talk(): record one question (stops after ~1 s of silence, max 8 s), transcribe, callback.
 - hands-free: keeps listening; only questions that contain the wake word "Bantay" are answered.
-Runs Whisper on the CPU so the 4 GB GPU stays free for the vision models.
+Uses the GPU when available (base.en is small: ~0.3 s per question) and falls back to the CPU.
 """
 from __future__ import annotations
 
@@ -16,8 +16,28 @@ RATE = 16000
 BLOCK = 480                      # 30 ms
 
 
+def looks_hallucinated(text: str, prompt: str = "") -> bool:
+    import re
+    import zlib
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words:
+        return True
+    if prompt and text.strip().lower().rstrip(".") in prompt.lower():
+        return True                                       # echo of the prompt
+    run = best = 1
+    for a, b in zip(words, words[1:]):                    # "six six six six six"
+        run = run + 1 if a == b else 1
+        best = max(best, run)
+    if best >= 4:
+        return True
+    if len(words) >= 8 and len(set(words)) / len(words) < 0.35:
+        return True
+    raw = text.encode()
+    return len(raw) > 40 and len(raw) / max(1, len(zlib.compress(raw))) > 2.4
+
+
 class Listener:
-    def __init__(self, models_dir: Path, model: str = "base", language: str | None = "en",
+    def __init__(self, models_dir: Path, model: str = "base.en", language: str | None = "en",
                  is_speaking=lambda: False, log=print):
         self.models_dir = Path(models_dir) / "whisper"
         self.model_name, self.language = model, language
@@ -40,20 +60,42 @@ class Listener:
         with self._lock:
             if self._model is None:
                 import whisper
-                self.log("[BantayAso] loading speech recognition (Whisper)...")
-                self._model = whisper.load_model(self.model_name, device="cpu",
-                                                 download_root=str(self.models_dir))
+                try:
+                    import torch
+                    dev = "cuda" if torch.cuda.is_available() else "cpu"
+                except Exception:
+                    dev = "cpu"
+                name = self.model_name
+                if self.language not in (None, "en") and name.endswith(".en"):
+                    name = name[:-3]                     # .en models only understand English
+                self.log(f"[BantayAso] loading speech recognition (Whisper {name} on {dev})...")
+                try:
+                    self._model = whisper.load_model(name, device=dev, download_root=str(self.models_dir))
+                except Exception:                        # e.g. GPU memory full -> CPU
+                    self._model = whisper.load_model(name, device="cpu", download_root=str(self.models_dir))
+                self._fp16 = next(self._model.parameters()).is_cuda
         return self._model
 
-    def transcribe(self, audio: np.ndarray) -> str:
+    def transcribe(self, audio: np.ndarray, hint: bool = True) -> str:
+        """Speech -> text, with filters for Whisper's known hallucinations on noise/silence:
+        echoing the prompt ("Bantay, Bantay, BantayAso") and repetition loops ("six, six, six...")."""
         if audio is None or len(audio) < RATE * 0.4:
             return ""
         model = self._load()
-        # initial_prompt biases Whisper toward our words, so "Bantay" isn't heard as "Van Ty"
-        hint = "Bantay, " + ", ".join(dict.fromkeys(self.vocab)) + ". Questions about my dogs."
-        res = model.transcribe(audio.astype(np.float32), language=self.language, fp16=False,
-                               condition_on_previous_text=False, temperature=0.0, initial_prompt=hint)
-        return (res.get("text") or "").strip()
+        kw = dict(language=self.language, fp16=getattr(self, "_fp16", False), beam_size=1,
+                  condition_on_previous_text=False, temperature=0.0, no_speech_threshold=0.6)
+        if hint:     # dog names help spelling; only for push-to-talk (hands-free would echo it)
+            names = [v for v in dict.fromkeys(self.vocab) if v.lower() not in ("bantay", "bantayaso")]
+            if names:
+                kw["initial_prompt"] = "My dogs are " + ", ".join(names) + "."
+        res = model.transcribe(audio.astype(np.float32), **kw)
+        segs = res.get("segments") or []
+        if segs and all(sg.get("no_speech_prob", 0) > 0.6 for sg in segs):
+            return ""                                    # it was noise, not speech
+        if segs and sum(sg.get("avg_logprob", 0) for sg in segs) / len(segs) < -1.2:
+            return ""                                    # very unsure: probably noise
+        text = (res.get("text") or "").strip()
+        return "" if looks_hallucinated(text, kw.get("initial_prompt", "")) else text
 
     # ---------------- recording ----------------
     def record_utterance(self, max_s: float = 8.0, wait_s: float = 6.0) -> np.ndarray | None:
@@ -86,7 +128,7 @@ class Listener:
                     continue
                 frames.append(block)
                 silence = 0 if loud else silence + 1
-                if silence * BLOCK / RATE > 0.9 or time.monotonic() - t_start > max_s:
+                if silence * BLOCK / RATE > 0.6 or time.monotonic() - t_start > max_s:
                     break
         return np.concatenate(frames)
 
@@ -136,14 +178,14 @@ class Listener:
                 audio = self.record_utterance(max_s=8, wait_s=30)
                 if audio is None or not self.hands_free:
                     continue
-                text = self.transcribe(audio)
+                text = self.transcribe(audio, hint=False)
                 errors = 0
                 if not text:
                     continue
-                self.log(f"[BantayAso] heard: {text!r}")
+                self.log(f"[BantayAso] heard (ignored unless it starts with \"Bantay\"): {text!r}")
                 if self.on_heard:
                     self.on_heard(text)
-                woke, rest = strip_wake(text)
+                woke, rest = strip_wake(text, strict=True)      # wake word must START the sentence
                 if woke and not rest:
                     # bare "Bantay": answer "Yes?" and treat the next sentence as the question
                     self._expect_until = time.monotonic() + 12

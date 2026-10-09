@@ -11,13 +11,21 @@ from pathlib import Path
 
 
 class Speaker:
-    """Speaks one message at a time from a queue. New danger messages jump the queue."""
+    """Speaks one message at a time from a queue, using Windows SAPI directly.
 
-    def __init__(self, rate: int = 175):
-        self.q: "queue.Queue[str]" = queue.Queue(maxsize=3)
-        self.rate = rate
+    pyttsx3 re-initialised on a background thread speaks once and then goes silent on Windows,
+    so we talk to SAPI ("SAPI.SpVoice") ourselves: reliable, and it lets the user pick a voice.
+    Falls back to pyttsx3 on other systems.
+    """
+
+    def __init__(self, rate: int = 0, voice: str = ""):
+        self.q: "queue.Queue[str]" = queue.Queue(maxsize=4)
+        self.rate = rate                 # SAPI rate -10 (slow) .. 10 (fast)
+        self.voice_name = voice          # part of a voice name, e.g. "Zira"
         self.enabled = True
         self.speaking = False
+        self.voices: list[str] = []
+        self._apply = True
         threading.Thread(target=self._run, name="Speaker", daemon=True).start()
 
     def say(self, text: str, urgent: bool = False) -> None:
@@ -34,36 +42,60 @@ class Speaker:
         except queue.Full:
             pass
 
+    def set_voice(self, name: str = None, rate: int = None) -> None:
+        if name is not None:
+            self.voice_name = name
+        if rate is not None:
+            self.rate = int(rate)
+        self._apply = True
+
     def _run(self) -> None:
-        # Windows speech (SAPI) runs over COM; a background thread must initialize COM itself,
-        # otherwise pyttsx3 can fail silently and nothing is heard.
+        sapi = None
         try:
             import pythoncom
             pythoncom.CoInitialize()
+            import win32com.client
+            sapi = win32com.client.Dispatch("SAPI.SpVoice")
         except Exception:
             try:
                 import comtypes
+                import comtypes.client
                 comtypes.CoInitialize()
+                sapi = comtypes.client.CreateObject("SAPI.SpVoice")
             except Exception:
-                pass
-        try:
-            import pyttsx3
-        except Exception as e:                        # pragma: no cover
-            print(f"[BantayAso] voice disabled: {e}")
-            return
+                sapi = None
+        if sapi is not None:
+            try:
+                tokens = sapi.GetVoices()
+                self.voices = [tokens.Item(i).GetDescription() for i in range(tokens.Count)]
+            except Exception:
+                self.voices = []
+        else:
+            print("[BantayAso] Windows voice (SAPI) not available, trying pyttsx3")
         while True:
             text = self.q.get()
             self.speaking = True
             try:
-                engine = pyttsx3.init()               # fresh engine per message: avoids SAPI hangs
-                engine.setProperty("rate", self.rate)
-                engine.say(text)
-                engine.runAndWait()
-                engine.stop()
+                if sapi is not None:
+                    if self._apply:
+                        self._apply = False
+                        sapi.Rate = max(-10, min(10, int(self.rate)))
+                        if self.voice_name:
+                            tokens = sapi.GetVoices()
+                            for i in range(tokens.Count):
+                                if self.voice_name.lower() in tokens.Item(i).GetDescription().lower():
+                                    sapi.Voice = tokens.Item(i)
+                                    break
+                    sapi.Speak(text)                     # blocking, on this thread only
+                else:
+                    import pyttsx3
+                    eng = pyttsx3.init()
+                    eng.say(text)
+                    eng.runAndWait()
             except Exception as e:                    # pragma: no cover
                 print(f"[BantayAso] voice error: {e!r}")
             finally:
-                time.sleep(0.3)                       # let the room go quiet before listening again
+                time.sleep(0.25)                      # let the room go quiet before listening again
                 self.speaking = self.q.qsize() > 0
 
 

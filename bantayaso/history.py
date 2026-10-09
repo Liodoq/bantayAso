@@ -5,7 +5,7 @@ import collections
 import time
 
 CATEGORIES = [            # (keyword in reason, spoken activity) - first match wins
-    ("disappeared", "possibly swallowed something"), ("chewing", "chewing something"),
+    ("fighting", "fighting"), ("rough", "rough play, nearly a fight"), ("disappeared", "possibly swallowed something"), ("chewing", "chewing something"),
     ("eating", "eating something"), ("nose-down", "eating something"), ("nosing", "nosing a hazard"),
     ("sleeping", "sleeping"), ("lying", "lying down"), ("sitting", "sitting"),
     ("standing", "standing"), ("walking", "walking around"), ("licking", "licking itself"),
