@@ -60,7 +60,28 @@ llm_reply["text"] = "Choco chewed a battery for 40 seconds."
 a = answer("Bantay, is Choco okay to leave alone?", pipe)
 check("LLM invents 'battery' -> rejected, safe fallback used", "battery" not in a, a)
 check("guard keeps a faithful LLM answer", guard("Choco is chewing something; check on him.", "Choco chewing") is not None)
+a = answer("Alright, can you generate me a html code?", pipe)
+check("off-topic (code) is declined politely", a.startswith("Sorry, that's not in my scope"), a)
+a = answer("Bantay, what's the capital of France?", pipe)
+check("off-topic (trivia) is declined politely", a.startswith("Sorry"), a)
+llm_reply["text"] = "OUT_OF_SCOPE"
+a = answer("Bantay, can the dog help me with my thesis?", pipe)
+check("LLM says OUT_OF_SCOPE -> polite decline", a.startswith("Sorry"), a)
+llm_reply["text"] = "UNKNOWN"
+a = answer("Bantay, did Choco bark at the neighbor?", pipe)
+check("LLM says UNKNOWN -> can't-tell + suggestions", a.startswith("I can't tell"), a)
 llm_reply["text"] = None
+a = answer("Bantay, is the dog hungry?", pipe)
+check("in-scope but no LLM -> can't-tell (no random summary)", a.startswith("I can't tell") or "Choco" in a, a)
+from bantayaso.qa import strip_wake  # noqa: E402
+for heard in ["Van Ty, what are my dogs doing?", "Ban tai what are my dogs doing", "bun tie, where are my dogs",
+              "Ban-tay where are my dogs", "Pantay where are my dogs", "Hey Bantay, where are my dogs",
+              "Bantai, where are my dogs", "Vantay where are my dogs"]:
+    woke, rest = strip_wake(heard)
+    check(f"wake word heard as {heard.split()[0]!r} / {heard[:12]!r}", woke and rest.lower().startswith(("what", "where")), rest)
+woke, rest = strip_wake("Van Ty can you hear me?")
+check("'Van Ty can you hear me?' -> wake + small talk", woke and answer("Van Ty can you hear me?", pipe).startswith("Yes, I can hear you"))
+check("normal sentence is not a false wake", not strip_wake("What are my dogs doing?")[0])
 a = answer("Bantay", pipe)
 check("wake word alone -> prompt", a.startswith("Yes?"), a)
 

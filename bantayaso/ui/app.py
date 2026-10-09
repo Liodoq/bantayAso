@@ -8,9 +8,9 @@ from pathlib import Path
 
 import threading
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPixmap, QShortcut
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QApplication, QComboBox, QButtonGroup, QCheckBox, QFileDialog, QFormLayout, QGraphicsOpacityEffect,
                                QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMainWindow, QMenu, QPushButton, QSizePolicy,
                                QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self.answered.connect(self.on_answered)
         self.mic_state.connect(self.on_mic_state)
         self.snooze_timer = QTimer(self, singleShot=True, timeout=self.end_snooze)
+        self._wire_button_feedback()
         self.worker.start()
 
     # ------------------------------------------------------------------ layout
@@ -124,6 +125,9 @@ class MainWindow(QMainWindow):
         top.addWidget(self.btn_ask)
         self.btn_rec = QPushButton("● Record", objectName="pill", checkable=True)
         btn_tray = QPushButton("⤓ Minimize to tray", objectName="pill")
+        self.btn_theme = QPushButton("☀ Light" if T.NAME == "dark" else "🌙 Dark", objectName="pill")
+        self.btn_theme.clicked.connect(lambda: self.apply_theme("light" if T.NAME == "dark" else "dark", save=True))
+        top.addWidget(self.btn_theme)
         for b in (self.btn_voice, self.btn_dnd, self.btn_rec, btn_tray):
             b.setCursor(Qt.PointingHandCursor)
             top.addWidget(b)
@@ -158,7 +162,7 @@ class MainWindow(QMainWindow):
         self.status_title.setStyleSheet("font-size: 14pt; font-weight: 600;")
         self.status_sub = lbl("", "muted", wrap=True)
         self.spoken = lbl("", wrap=True)
-        self.spoken.setStyleSheet(f"background: #0e0b0999; border: 1px solid {T.LINE}; border-radius: 10px; padding: 10px;")
+        self.spoken.setStyleSheet(f"background: {T.INSET}; border: 1px solid {T.LINE}; border-radius: 10px; padding: 10px;")
         self.spoken.hide()
         btns = QHBoxLayout()
         self.btn_ack = QPushButton("I've got it", objectName="primary")
@@ -183,6 +187,8 @@ class MainWindow(QMainWindow):
         ac.addWidget(self.ask_box)
         self.ask_answer = lbl("Type a question, click 🎙 Ask Bantay, or turn on hands-free in Settings and say \"Bantay, …\"", "muted", wrap=True)
         ac.addWidget(self.ask_answer)
+        self.heard_label = lbl("", "faint", wrap=True)
+        ac.addWidget(self.heard_label)
         right.addWidget(ask_card)
 
         rec_card = card()
@@ -253,7 +259,7 @@ class MainWindow(QMainWindow):
         self.ev_img = QLabel()
         self.ev_img.setFixedHeight(240)
         self.ev_img.setAlignment(Qt.AlignCenter)
-        self.ev_img.setStyleSheet("background: #140f0b; border-radius: 10px;")
+        self.ev_img.setStyleSheet(f"background: {T.INSET}; border-radius: 10px;")
         dv.addWidget(self.ev_img)
         self.ev_kv = QFormLayout()
         self.kv = {}
@@ -262,7 +268,7 @@ class MainWindow(QMainWindow):
             self.ev_kv.addRow(lbl(k, "muted"), self.kv[k])
         dv.addLayout(self.ev_kv)
         self.ev_ai = lbl("", wrap=True)
-        self.ev_ai.setStyleSheet(f"background: #0e0b0999; border: 1px solid {T.LINE}; border-radius: 10px; padding: 10px;")
+        self.ev_ai.setStyleSheet(f"background: {T.INSET}; border: 1px solid {T.LINE}; border-radius: 10px; padding: 10px;")
         dv.addWidget(self.ev_ai)
         b = QHBoxLayout()
         self.btn_open = QPushButton("Open snapshot")
@@ -327,13 +333,20 @@ class MainWindow(QMainWindow):
         v.setSpacing(12)
         v.addWidget(lbl("Settings", "h1"))
         c = card()
+        c.setMaximumWidth(820)
         f = QFormLayout(c)
         f.setContentsMargins(18, 18, 18, 18)
         f.setVerticalSpacing(12)
         cfg = config.load()
         al = cfg.get("alerts", {})
-        self.set_name = QLineEdit(cfg.get("dog_name", ""))
-        self.set_name.setPlaceholderText("your dog")
+        self.pending_dog_name = ""
+        add_row = QHBoxLayout()
+        self.add_dog_name = QLineEdit()
+        self.add_dog_name.setPlaceholderText("Dog's name, e.g. Oreo")
+        add_btn = QPushButton("Add dog, then click it on the video", objectName="primary")
+        add_btn.clicked.connect(self.add_dog)
+        add_row.addWidget(self.add_dog_name, 1)
+        add_row.addWidget(add_btn)
         self.set_voice_cb = QCheckBox("Speak alerts out loud")
         self.set_voice_cb.setChecked(al.get("voice", True))
         self.set_vlm_cb = QCheckBox("Also speak the local AI's description")
@@ -349,10 +362,15 @@ class MainWindow(QMainWindow):
         clip_row = QHBoxLayout()
         clip_row.addWidget(self.set_clip, 1)
         clip_row.addWidget(pick)
-        f.addRow(lbl("Dog name", "muted"), self.set_name)
+        f.addRow(lbl("Add a dog", "muted"), add_row)
         f.addRow(lbl("Voice", "muted"), self.set_voice_cb)
         f.addRow(lbl("", "muted"), self.set_vlm_cb)
         f.addRow(lbl("Notifications", "muted"), self.set_toast_cb)
+        self.set_theme = QComboBox()
+        self.set_theme.addItems(["Dark (espresso + light brown)", "Light (warm white + brown)"])
+        self.set_theme.currentIndexChanged.connect(lambda i: self.apply_theme("light" if i == 1 else "dark"))
+        self.set_theme.setCurrentIndex(1 if cfg.get("ui", {}).get("theme") == "light" else 0)
+        f.addRow(lbl("Theme", "muted"), self.set_theme)
         f.addRow(lbl("Video", "muted"), self.set_hz_cb)
         f.addRow(lbl("Owner voice", "muted"), clip_row)
         self.set_hf_cb = QCheckBox("Hands-free: answer when I say \"Bantay, …\"")
@@ -398,6 +416,68 @@ class MainWindow(QMainWindow):
         self.tray.show()
         self._tray_level = -1
 
+    # ------------------------------------------------------------------ theme
+    def apply_theme(self, name: str, save: bool = False):
+        T.apply(name)
+        QApplication.instance().setStyleSheet(T.QSS)
+        inset = f"background: {T.INSET}; border: 1px solid {T.LINE}; border-radius: 10px; padding: 10px;"
+        self.spoken.setStyleSheet(inset)
+        self.ev_ai.setStyleSheet(inset)
+        self.ev_img.setStyleSheet(f"background: {T.INSET}; border-radius: 10px;")
+        for w in (self.st_danger, self.st_warn):
+            pass
+        self.st_danger.value_label.setStyleSheet(f"font-size: 18pt; font-weight: 600; color: {T.DANGER};")
+        self.st_warn.value_label.setStyleSheet(f"font-size: 18pt; font-weight: 600; color: {T.WARN};")
+        for w in (self.st_watch, self.st_hot):
+            w.value_label.setStyleSheet(f"font-size: 18pt; font-weight: 600; color: {T.CREAM};")
+        self.btn_theme.setText("☀ Light" if T.NAME == "dark" else "🌙 Dark")
+        if hasattr(self, "set_theme"):
+            self.set_theme.setCurrentIndex(1 if T.NAME == "light" else 0)
+        self._set_status_card(self.meter.level, self.status_title.text(), self.status_sub.text(), None)
+        for w in (self.video, self.zone_video, self.meter, self.chart):
+            w.update()
+        self.refresh_recent()
+        if save:
+            cfg = config.load()
+            cfg.setdefault("ui", {})["theme"] = T.NAME
+            config.save(cfg)
+
+    # ------------------------------------------------------------------ button feedback
+    CONFIRM = {"Save settings": "Saved ✓", "Save zones": "Zones saved ✓", "Finish zone": "Zone added ✓",
+               "Undo point": "Undone ✓", "Delete last zone": "Deleted ✓", "Reset taught actions": "Reset ✓",
+               "Forget selected dog": "Forgotten ✓", "I've got it": "Got it ✓", "Snooze 5 min": "Snoozed ✓",
+               "Mark false alarm": "Marked ✓", "Undo false alarm": "Restored ✓", "Open snapshot": "Opening…",
+               "Add dog, then click it on the video": "Now click the dog ✓"}
+
+    def _wire_button_feedback(self):
+        """Every button: pointer cursor, hover/pressed styles (QSS), a quick pulse when clicked,
+        and a short confirmation label on action buttons so you can see it worked."""
+        for b in self.findChildren(QPushButton):
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, b=b: self._pulse(b))
+
+    def _pulse(self, b: QPushButton):
+        eff = QGraphicsOpacityEffect(b)
+        b.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity", b)
+        anim.setDuration(260)
+        anim.setKeyValueAt(0.0, 1.0)
+        anim.setKeyValueAt(0.35, 0.45)
+        anim.setKeyValueAt(1.0, 1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.finished.connect(lambda: b.setGraphicsEffect(None))
+        anim.start(QPropertyAnimation.DeleteWhenStopped)
+        text = b.text()
+        if text in self.CONFIRM and not b.property("confirming"):
+            b.setProperty("confirming", True)
+            b.setText(self.CONFIRM[text])
+
+            def restore(b=b, text=text):
+                if b.text() == self.CONFIRM.get(text):
+                    b.setText(text)
+                b.setProperty("confirming", False)
+            QTimer.singleShot(1400, restore)
+
     # ------------------------------------------------------------------ live updates
     def on_ready(self):
         self.subtitle.setText(f"Live since {time.strftime('%I:%M %p').lstrip('0')}")
@@ -405,6 +485,7 @@ class MainWindow(QMainWindow):
         if lst:
             lst.on_text = lambda text, woke: self.heard.emit(text, woke)
             lst.on_state = lambda s: self.mic_state.emit(s)
+            lst.on_heard = lambda t: self.mic_state.emit("heard:" + t)
             self.apply_hands_free(self.set_hf_cb.isChecked())
         else:
             self.btn_ask.setEnabled(False)
@@ -444,15 +525,15 @@ class MainWindow(QMainWindow):
     def _set_status_card(self, level, title, sub, alert):
         color = T.LEVEL_COLORS[level]
         self.level_pill.setText(f"  ●  {T.LEVEL_NAMES[level]}  ")
-        self.level_pill.setStyleSheet(f"background: {color}; color: #1a0f08; font-weight: 700; border-radius: 11px; padding: 3px 4px;")
+        self.level_pill.setStyleSheet(f"background: {color}; color: {'#FFFFFF' if T.NAME == 'light' else '#1a0f08'}; font-weight: 700; border-radius: 11px; padding: 3px 4px;")
         self.level_pill.setFixedHeight(24)
         self.level_pill.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.status_title.setText(title)
         self.status_sub.setText(sub)
         hot = level >= 2
         self.status_card.setStyleSheet(
-            f"QFrame#card {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #3a2216, stop:1 {T.PANEL});"
-            f" border: 1px solid #6b3a22; border-radius: 12px; }}" if hot else "")
+            f"QFrame#card {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {T.HOT}, stop:1 {T.PANEL});"
+            f" border: 1px solid {T.HOT_LINE}; border-radius: 12px; }}" if hot else "")
         if alert:
             txt = f"<b style='color:{T.CARAMEL}'>Spoken:</b> “{alert['text']}”"
             if alert.get("vlm"):
@@ -545,7 +626,13 @@ class MainWindow(QMainWindow):
             self.ask_answer.setText("Listening... ask your question.")
 
     def on_mic_state(self, s: str):
-        self.btn_ask.setText({"listening": "🎙 Listening...", "thinking": "🎙 Thinking..."}.get(s, "🎙 Ask Bantay"))
+        if s.startswith("heard:"):
+            self.heard_label.setText(f"Heard: “{s[6:]}”")
+            return
+        hf = self.worker.pipe and self.worker.pipe.listener and self.worker.pipe.listener.hands_free
+        self.btn_ask.setText({"listening": "🎙 Listening...", "thinking": "🎙 Thinking...",
+                              "hands_free": "👂 Say \"Bantay…\"", "hf_error": "🎙 Mic problem"}.get(
+            s, "👂 Say \"Bantay…\"" if hf else "🎙 Ask Bantay"))
 
     def on_heard(self, text: str, _woke: bool):
         if not text:
@@ -570,6 +657,9 @@ class MainWindow(QMainWindow):
         lst = self.worker.pipe.listener if self.worker.pipe else None
         if lst:
             lst.set_hands_free(on)
+            self.on_mic_state("hands_free" if on else "idle")
+            if on:
+                self.heard_label.setText("Hands-free is on: say \"Bantay\", pause, then your question.")
 
     # ------------------------------------------------------------------ dog names
     def video_click(self, x: int, y: int, button: int):
@@ -582,6 +672,12 @@ class MainWindow(QMainWindow):
         if not hit:
             return
         tid, box, name = min(hit, key=lambda t: (t[1][2] - t[1][0]) * (t[1][3] - t[1][1]))
+        if self.pending_dog_name and pipe.registry:
+            new, self.pending_dog_name = self.pending_dog_name, ""
+            pipe.registry.start_enroll(tid, new)
+            self.ask_answer.setText(f"Learning what {new} looks like... keep {new} in view for a few seconds.")
+            QTimer.singleShot(4000, self.refresh_dogs)
+            return
         menu = QMenu(self)
         if pipe.registry:
             menu.addAction(f"Name this dog{f' ({name})' if name else ''}...").setData(("name", None))
@@ -610,6 +706,17 @@ class MainWindow(QMainWindow):
         reg = self.worker.pipe.registry if self.worker.pipe else None
         for n, arr in sorted((reg.dogs if reg else {}).items()):
             self.dog_list.addItem(f"{n}   ·   {len(arr)} samples")
+
+    def add_dog(self):
+        name = self.add_dog_name.text().strip()
+        if not name:
+            self.add_dog_name.setFocus()
+            return
+        self.pending_dog_name = name
+        self.add_dog_name.clear()
+        self.go(0)
+        self.nav.button(0).setChecked(True)
+        self.ask_answer.setText(f"Now click {name} on the video so I can learn what {name} looks like.")
 
     def reset_examples(self):
         if self.worker.pipe and self.worker.pipe.classifier:
@@ -764,28 +871,34 @@ class MainWindow(QMainWindow):
 
     def save_settings(self):
         cfg = config.load()
-        cfg["dog_name"] = self.set_name.text().strip()
+        cfg.pop("dog_name", None)          # each dog has its own name now (My dogs)
         al = cfg.setdefault("alerts", {})
         al["voice"] = self.set_voice_cb.isChecked()
         al["speak_vlm"] = self.set_vlm_cb.isChecked()
         al["toast"] = self.set_toast_cb.isChecked()
         al["owner_voice_clip"] = self.set_clip.text().strip()
         cfg.setdefault("qa", {})["hands_free"] = self.set_hf_cb.isChecked()
+        new_theme = "light" if self.set_theme.currentIndex() == 1 else "dark"
+        theme_changed = False
+        cfg.setdefault("ui", {})["theme"] = new_theme
         config.save(cfg)
         self.apply_hands_free(self.set_hf_cb.isChecked())
         pipe = self.worker.pipe
         if pipe:
-            pipe.dog_name = cfg["dog_name"] or "your dog"
+            pipe.dog_name = "your dog"
             pipe.speak_vlm, pipe.toasts, pipe.owner_clip = al["speak_vlm"], al["toast"], al["owner_voice_clip"]
             pipe.show_hazards = self.set_hz_cb.isChecked()
         self.btn_voice.setChecked(al["voice"])
-        self.title.setText(f"Watching {cfg['dog_name']}" if cfg["dog_name"] else "Watching your dogs")
+        self.title.setText("Watching your dogs")
+        if theme_changed:
+            self.apply_theme(new_theme)
 
 
 def run_ui(args) -> None:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("BantayAso")
     app.setQuitOnLastWindowClosed(False)
+    T.apply(config.load().get("ui", {}).get("theme", "dark"))
     app.setStyleSheet(T.QSS)
     win = MainWindow(args)
     win.show()

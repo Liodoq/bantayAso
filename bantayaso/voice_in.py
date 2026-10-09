@@ -30,6 +30,10 @@ class Listener:
         self._hf_thread = None
         self.on_text = None                      # callback(text, wake_word_heard: bool)
         self.on_state = None                     # callback("listening" / "thinking" / "idle")
+        self.vocab = ["Bantay", "BantayAso"]     # spelling hints for Whisper (dog names added later)
+        self.on_heard = None                     # callback(text) for every hands-free utterance (debug view)
+        self.level = 0.0
+        self._expect_until = 0.0                 # after a bare "Bantay", the next sentence is the question
 
     # ---------------- model ----------------
     def _load(self):
@@ -45,8 +49,10 @@ class Listener:
         if audio is None or len(audio) < RATE * 0.4:
             return ""
         model = self._load()
+        # initial_prompt biases Whisper toward our words, so "Bantay" isn't heard as "Van Ty"
+        hint = "Bantay, " + ", ".join(dict.fromkeys(self.vocab)) + ". Questions about my dogs."
         res = model.transcribe(audio.astype(np.float32), language=self.language, fp16=False,
-                               condition_on_previous_text=False, temperature=0.0)
+                               condition_on_previous_text=False, temperature=0.0, initial_prompt=hint)
         return (res.get("text") or "").strip()
 
     # ---------------- recording ----------------
@@ -60,8 +66,12 @@ class Listener:
                 block, _ = st.read(BLOCK)
                 block = block[:, 0].copy()
                 rms = float(np.sqrt(np.mean(block ** 2)) + 1e-9)
-                floor = rms if floor is None else (0.95 * floor + 0.05 * rms if not started else floor)
-                loud = rms > max(0.012, floor * 3.0)
+                if floor is None:
+                    floor = rms
+                loud = rms > max(0.008, floor * 2.5)
+                if not loud and not started:                 # learn the room noise from quiet blocks only
+                    floor = 0.95 * floor + 0.05 * rms
+                self.level = rms
                 if self.is_speaking():
                     frames, started, silence = [], False, 0
                     if time.monotonic() - t0 > wait_s + max_s:
@@ -116,6 +126,8 @@ class Listener:
 
     def _hands_free_loop(self):
         from .qa import strip_wake
+        self._state("hands_free")
+        errors = 0
         while self.hands_free:
             if self.busy:
                 time.sleep(0.2)
@@ -125,11 +137,29 @@ class Listener:
                 if audio is None or not self.hands_free:
                     continue
                 text = self.transcribe(audio)
-                woke, _ = strip_wake(text)
-                if woke and self.on_text:
-                    self.on_text(text, True)
+                errors = 0
+                if not text:
+                    continue
+                self.log(f"[BantayAso] heard: {text!r}")
+                if self.on_heard:
+                    self.on_heard(text)
+                woke, rest = strip_wake(text)
+                if woke and not rest:
+                    # bare "Bantay": answer "Yes?" and treat the next sentence as the question
+                    self._expect_until = time.monotonic() + 12
+                    if self.on_text:
+                        self.on_text("Bantay", True)
+                elif woke or time.monotonic() < self._expect_until:
+                    self._expect_until = 0.0
+                    if self.on_text:
+                        self.on_text(text, True)
             except Exception as e:
-                self.log(f"[BantayAso] hands-free listening stopped: {e}")
-                self.hands_free = False
-                self._state("idle")
-                return
+                errors += 1
+                self.log(f"[BantayAso] hands-free error ({errors}): {e!r}")
+                if errors >= 3:
+                    self.log("[BantayAso] hands-free listening stopped (microphone problem)")
+                    self.hands_free = False
+                    self._state("hf_error")
+                    return
+                time.sleep(1.0)
+        self._state("idle")

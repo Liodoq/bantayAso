@@ -34,7 +34,7 @@ class VideoView(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
-        p.fillRect(self.rect(), QColor("#0f0b08"))
+        p.fillRect(self.rect(), QColor(T.INSET))
         if self._img is None:
             p.setPen(QColor(T.MUTED))
             p.drawText(self.rect(), Qt.AlignCenter, self.placeholder)

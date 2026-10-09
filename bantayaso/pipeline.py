@@ -232,6 +232,8 @@ class Pipeline:
     # ------------------------------------------------------------------ Ask Bantay
     def ask(self, question: str, speak: bool = True) -> str:
         from .qa import answer
+        if self.listener is not None and self.registry is not None:     # dog names help Whisper spell
+            self.listener.vocab = ["Bantay", "BantayAso", *self.registry.dogs.keys()]
         try:
             text = answer(question, self)
         except Exception as e:                     # pragma: no cover
@@ -246,9 +248,16 @@ class Pipeline:
         """Phrase an open question with a small local LLM, using ONLY the given facts."""
         try:
             import requests
-            prompt = ("You are Bantay, a friendly home pet-camera assistant. Answer the owner's question "
-                      "in one or two short sentences using ONLY these facts. If the facts don't say, "
-                      f"say you didn't see that.\nFacts: {facts}\nQuestion: {question}\nAnswer:")
+            prompt = ("You are Bantay, a home pet-camera assistant. You ONLY answer questions about the "
+                      "owner's dogs as seen by the camera, using ONLY the facts below.\n"
+                      "Rules:\n"
+                      "- If the question is not about the dogs (for example code, homework, news, math, "
+                      "other topics), reply exactly: OUT_OF_SCOPE\n"
+                      "- If the facts do not contain the answer, reply exactly: UNKNOWN\n"
+                      "- Otherwise answer in one or two short, friendly sentences. Never invent objects, "
+                      "times or numbers that are not in the facts. No medical advice; suggest a vet for "
+                      "health worries.\n"
+                      f"Facts: {facts}\nQuestion: {question}\nAnswer:")
             r = requests.post(self.ollama_url.rstrip("/") + "/api/generate", timeout=20,
                               json={"model": self.qa_model, "prompt": prompt, "stream": False,
                                     "keep_alive": "30m", "options": {"temperature": 0.2, "num_predict": 80}})

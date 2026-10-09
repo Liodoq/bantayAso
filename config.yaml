@@ -117,7 +117,12 @@ alerts:
   voice: true
   do_not_disturb: false
   owner_voice_clip: ''
+  speak_vlm: true
+  toast: true
 detect:
   dog_conf: 0.18
   imgsz: 960
   hazard_conf: 0.25
+dog_name: Oreo
+qa:
+  hands_free: true
