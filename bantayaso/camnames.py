@@ -31,6 +31,14 @@ def _collect() -> dict:
 def camera_names(timeout: float = 10.0) -> dict:
     """Run _collect() in a child process; {} lists on any failure or crash."""
     try:
+        if getattr(sys, "frozen", False):              # installed app: same exe in "names only" mode,
+            import tempfile                            # answering through a file (no console window)
+            out = Path(tempfile.gettempdir()) / f"bantayaso_cams_{id(timeout)}.json"
+            subprocess.run([sys.executable, "--camnames", str(out)], timeout=timeout,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            data = json.loads(out.read_text(encoding="utf-8"))
+            out.unlink(missing_ok=True)
+            return data
         r = subprocess.run([sys.executable, "-m", "bantayaso.camnames"], capture_output=True, text=True,
                            cwd=str(Path(__file__).resolve().parents[1]),
                            timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

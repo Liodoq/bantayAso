@@ -111,5 +111,21 @@ for heard, want in (("Bantay, is Patchouchai sleeping?", "Bantay, is Pachuchay s
     got = correct_names(heard, names)
     check(f"name fix: {heard!r}", got == want, got)
 
+# listening: audio cleanup and prompt echoes
+import numpy as np                                          # noqa: E402
+from bantayaso.voice_in import clean_audio, looks_hallucinated   # noqa: E402
+r = 16000
+t = np.arange(r * 3) / r
+speech = np.zeros_like(t)
+speech[r:2 * r] = 0.2 * np.sin(2 * np.pi * 300 * t[r:2 * r])
+out = clean_audio((speech + 0.05 * np.sin(2 * np.pi * 50 * t)).astype(np.float32))
+check("silence around the words is trimmed (3 s -> ~2 s)", 1.5 < len(out) / r < 2.3, len(out) / r)
+check("50 Hz hum removed", float(np.abs(np.fft.rfft(out))[int(50 * len(out) / r)]) < 1.0)
+P = "Bantay, is Oreo sleeping? Where is Pachuchay? What happened today? Read the events."
+check("a real question that matches one example sentence is kept", not looks_hallucinated("What happened today?", P))
+check("Whisper reading back several example sentences is dropped",
+      looks_hallucinated("Bantay, is Oreo sleeping? Where is Pachuchay?", P))
+check("a normal new question is kept", not looks_hallucinated("Bantay, is Brownie eating?", P))
+
 print("ALL PASS" if fails == 0 else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

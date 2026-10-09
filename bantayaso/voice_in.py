@@ -22,8 +22,16 @@ def looks_hallucinated(text: str, prompt: str = "") -> bool:
     words = re.findall(r"[a-z']+", text.lower())
     if not words:
         return True
-    if prompt and text.strip().lower().rstrip(".") in prompt.lower():
-        return True                                       # echo of the prompt
+    if prompt:
+        t = re.sub(r"[^a-z' ]", " ", text.lower()).split()
+        p = re.sub(r"[^a-z' ]", " ", prompt.lower())
+        singles = [re.sub(r"[^a-z' ]", " ", s.lower()).split() for s in re.split(r"(?<=[.?!])\s+", prompt)]
+        # a whole run of the example sentences = Whisper echoing the prompt on noise;
+        # ONE of them ("What happened today?") is a real question and is kept
+        if t and " ".join(t) in " ".join(p.split()) and t not in singles and len(t) > max(map(len, singles)):
+            return True
+        if t and t[:3] == ["my", "dogs", "are"] and t in singles:
+            return True                                   # the name hint itself, read back on noise
     run = best = 1
     for a, b in zip(words, words[1:]):                    # "six six six six six"
         run = run + 1 if a == b else 1
@@ -95,6 +103,29 @@ def correct_names(text: str, names) -> str:
     return "".join(words)
 
 
+def clean_audio(audio, rate: int = 16000):
+    """Make speech easier for Whisper: cut low hum/rumble (fans, desk thumps < 90 Hz), trim the
+    silence before/after the words, and add a short quiet pad (Whisper misreads clipped edges)."""
+    a = np.asarray(audio, dtype=np.float32)
+    if a.size < rate * 0.3:
+        return a
+    spec = np.fft.rfft(a)
+    freqs = np.fft.rfftfreq(a.size, 1.0 / rate)
+    spec[freqs < 90] = 0                                   # high-pass
+    a = np.fft.irfft(spec, n=a.size).astype(np.float32)
+    frame = int(rate * 0.02)
+    n = a.size // frame
+    if n > 4:
+        energy = np.sqrt(np.mean(a[: n * frame].reshape(n, frame) ** 2, axis=1))
+        loud = np.where(energy > max(0.1 * float(energy.max()), 0.002))[0]
+        if loud.size:
+            start = max(0, (loud[0] - 8) * frame)          # keep 160 ms before the first word
+            end = min(a.size, (loud[-1] + 12) * frame)     # and 240 ms after the last
+            a = a[start:end]
+    pad = np.zeros(int(rate * 0.25), np.float32)
+    return np.concatenate([pad, a, pad])
+
+
 def prepare_audio(audio):
     """Remove DC offset and apply bounded gain; never turn silence into loud noise."""
     audio=np.asarray(audio,dtype=np.float32)
@@ -144,8 +175,16 @@ class Listener:
                 self.log(f"[BantayAso] loading speech recognition (Whisper {name} on {dev})...")
                 try:
                     self._model = whisper.load_model(name, device=dev, download_root=str(self.models_dir))
-                except Exception:                        # e.g. GPU memory full -> CPU
-                    self._model = whisper.load_model(name, device="cpu", download_root=str(self.models_dir))
+                except Exception:                        # e.g. GPU memory full -> CPU, or not downloaded
+                    try:
+                        self._model = whisper.load_model(name, device="cpu", download_root=str(self.models_dir))
+                        self.log(f"[BantayAso] Whisper {name} is on the CPU (GPU memory is full)")
+                    except Exception as e:               # offline and never downloaded -> the small model
+                        fallback = "base.en" if name.endswith(".en") else "base"
+                        if name == fallback:
+                            raise
+                        self.log(f"[BantayAso] Whisper {name} unavailable ({e.__class__.__name__}); using {fallback}")
+                        self._model = whisper.load_model(fallback, device=dev, download_root=str(self.models_dir))
                 self._fp16 = next(self._model.parameters()).is_cuda
         return self._model
 
@@ -154,17 +193,24 @@ class Listener:
         echoing the prompt ("Bantay, Bantay, BantayAso") and repetition loops ("six, six, six...")."""
         if audio is None or len(audio) < RATE * 0.4:
             return ""
-        audio = prepare_audio(audio)
+        audio = prepare_audio(clean_audio(audio))
         if float(np.sqrt(np.mean(audio ** 2))) < 0.001:
             self._state("too_quiet")
             return ""
         model = self._load()
+        # temperature fallback: if the careful (greedy/beam) reading looks broken (repeats, very unsure),
+        # Whisper retries a little more freely instead of returning garbage
         kw = dict(language=self.language, fp16=getattr(self, "_fp16", False), beam_size=self.beam_size,
-                  condition_on_previous_text=False, temperature=0.0, no_speech_threshold=0.6)
+                  best_of=3, condition_on_previous_text=False, temperature=(0.0, 0.2, 0.4),
+                  compression_ratio_threshold=2.4, logprob_threshold=-1.0, no_speech_threshold=0.6)
         names = list(dict.fromkeys(self.names_fn() or []))
-        if hint:     # dog names help spelling; only for push-to-talk (hands-free would echo it)
-            if names:
-                kw["initial_prompt"] = "My dogs are " + ", ".join(names) + "."
+        # A short example of how the owner talks: Whisper then spells "Bantay" and the dog names right
+        # and expects questions about dogs. Used in hands-free too; echoes are filtered below.
+        sample = names[:3] or ["your dog"]
+        kw["initial_prompt"] = (f"Bantay, is {sample[0]} sleeping? Where is {sample[-1]}? "
+                                f"What happened today? Read the events.")
+        if hint and names:
+            kw["initial_prompt"] = "My dogs are " + ", ".join(names) + ". " + kw["initial_prompt"]
         res = model.transcribe(audio.astype(np.float32), **kw)
         segs = res.get("segments") or []
         if segs and all(sg.get("no_speech_prob", 0) > 0.6 for sg in segs):

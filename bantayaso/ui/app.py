@@ -103,7 +103,7 @@ class MainWindow(QMainWindow):
     def __init__(self, args):
         super().__init__()
         self.setWindowTitle("BantayAso")
-        self.setWindowIcon(QIcon(paw_pixmap(64)))
+        self.setWindowIcon(app_icon())
         self.resize(1320, 800)
         self.worker = Worker(args, self)
         self.frame_size = (1280, 720)
@@ -328,7 +328,14 @@ class MainWindow(QMainWindow):
         self.ask_box = QLineEdit()
         self.ask_box.setPlaceholderText("Is Oreo sleeping? · What happened today?")
         self.ask_box.returnPressed.connect(lambda: self.ask_text(self.ask_box.text()))
-        ac.addWidget(self.ask_box)
+        ask_row = QHBoxLayout()
+        ask_row.setSpacing(8)
+        ask_row.addWidget(self.ask_box, 1)
+        self.btn_send = QPushButton("Ask", objectName="primary")      # same as pressing Enter
+        self.btn_send.setToolTip("Send the question (Enter)")
+        self.btn_send.clicked.connect(lambda: self.ask_text(self.ask_box.text()))
+        ask_row.addWidget(self.btn_send)
+        ac.addLayout(ask_row)
         self.ask_answer = lbl("Type a question, press F2 to talk, or turn on hands-free in the Bantay menu.",
                               "muted", wrap=True)
         ac.addWidget(self.ask_answer)
@@ -2033,9 +2040,25 @@ def _install_crash_log() -> None:
     run_ui._crash_file = f                       # keep it open for faulthandler
 
 
+def app_icon() -> QIcon:
+    """The BantayAso logo (assets/bantayaso.ico); falls back to the paw drawn in code."""
+    for base in (Path(getattr(sys, "_MEIPASS", "")), Path(__file__).resolve().parents[2]):
+        ico = base / "assets" / "bantayaso.ico"
+        if ico.exists():
+            return QIcon(str(ico))
+    return QIcon(paw_pixmap(256))
+
+
 def run_ui(args) -> None:
     _install_crash_log()
+    if sys.platform == "win32":                   # own taskbar button + icon instead of python.exe's
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BantayAso.LocalAIDogWatcher")
+        except Exception:
+            pass
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setWindowIcon(app_icon())
     app.setStyle("Fusion")             # native Windows style ignores parts of the stylesheet (dropdowns)
     app.setApplicationName("BantayAso")
     app.setQuitOnLastWindowClosed(False)

@@ -7,8 +7,11 @@ def scene_answer(question, pipe, subject=None):
     q = question.lower()
     snap = getattr(pipe, 'scene', None)
     vocab = getattr(getattr(pipe, 'hazard_det', None), 'names', [])
+    # "dog" itself is in the Things list (as a look-alike word), so "Where are my dogs?" must not
+    # turn into "is there an object called dog?" - words about the dogs are never object requests
     requested = next((n for n in sorted(vocab, key=len, reverse=True)
-                      if re.search(r'\b' + re.escape(n.lower()) + r's?\b', q)), None)
+                      if n.lower() not in ('dog', 'dogs', 'puppy', 'pet', 'animal')
+                      and re.search(r'\b' + re.escape(n.lower()) + r's?\b', q)), None)
     object_question = bool(requested or re.search(r'\b(things?|objects?|pillow|blanket)\b|beside|next to|near them|near him|near her', q))
     location_question = bool(re.search(r'\bwhere\b|nasaan|asan|\b(on|in|at) (the |a )?(bed|sofa|play|food|trash|area|zone)', q))
     if location_question and re.search(r"\b(on|in|at) (the |a )?(bed|sofa|play|food|trash|area|zone)",q) and not re.search(r"things?|objects?|beside|next to",q):
@@ -63,14 +66,26 @@ def scene_answer(question, pipe, subject=None):
         if hits:
             return f'Not all of them. {len(hits)} of the {len(dogs)} dogs in view are in the {target} area.'
         return f'No, none of the dogs I can see are in the {target} area.'
-    parts=[]
+    groups={}                                   # same place -> one sentence: "Oreo and Pachuchay are on Bed 1"
+    unnamed=0
     for d in dogs:
-        name=d['name'] or ('The dog' if len(dogs)==1 else 'One dog')
+        if d['name']:
+            name=d['name']
+        else:
+            unnamed+=1
+            name='the dog' if len(dogs)==1 else 'an unnamed dog' if unnamed==1 else 'another unnamed dog'
         places=', '.join(z['name'] for z in d['zones']) if snap['zones_reliable'] else ''
         x=(d['box'][0]+d['box'][2])/2/snap['width']
         side='left' if x<0.33 else 'middle' if x<0.66 else 'right'
-        parts.append(f'{name} is in {places}' if places else f'{name} is on the {side} of the camera view')
-    return '. '.join(parts)+'.'
+        where=f'in {places}' if places else f'on the {side} of the camera view'
+        groups.setdefault(where,[]).append(name)
+    parts=[]
+    for where,names in groups.items():
+        who=names[0] if len(names)==1 else ', '.join(names[:-1])+' and '+names[-1]
+        verb='is' if len(names)==1 else ('are both' if len(names)==2 else 'are all')
+        parts.append(f'{who[0].upper()+who[1:]} {verb} {where}')
+    lead=f'I can see {len(dogs)} dogs. ' if len(dogs)>1 and not subject else ''
+    return lead+'. '.join(parts)+'.'
 
 
 def box_gap(a,b):

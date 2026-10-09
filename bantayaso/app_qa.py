@@ -118,7 +118,9 @@ def app_answer(question,pipe):
     # who the dogs are ("Who are the dogs?", "Who do you see?", "Do you know my dogs?", "Sino sila?")
     if re.search(r"who (are|r) (the|my|your|these|those)?\s*dogs|who('s| is) (there|here|on camera|in view)|who do you see|"
                  r"(names? of|name) (the|my) dogs|what are (the|my) dogs'? names|do you know (my|the) dogs|"
-                 r"how many dogs do i have|which dogs (do i have|are registered)|\bsino (sila|ang mga aso)|kilala mo",q):
+                 r"how many dogs do i have|which dogs (do i have|are registered)|\bsino (sila|ang mga aso)|kilala mo|"
+                 r"(which|what) dogs (are|do you|can you)|dogs (are )?(on camera|in view|here|there)|dogs do you see",q) \
+            and not (re.search(r"how many", q) and not re.search(r"do i have", q)):
         return dogs_roster(pipe)
     m=re.search(r"(who is|tell me about|do you know)\s+(\w+)",q)
     if m:

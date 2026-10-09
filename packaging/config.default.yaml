@@ -1,6 +1,8 @@
+# BantayAso default settings for a fresh install (copied to %LOCALAPPDATA%\BantayAso\config.yaml on first run).
+# No zones, dogs or personal data: each user sets those up in the app.
 camera:
   type: device
-  index: 1
+  index: 0
   backend: msmf
   width: 1280
   height: 720
@@ -56,20 +58,7 @@ actions:
 - scratching furniture
 - jumping on furniture
 - licking itself
-zones:
-- name: Bed 1
-  type: bed
-  points:
-  - - 0.2484
-    - 0.2375
-  - - 0.7422
-    - 0.3556
-  - - 0.9484
-    - 0.3819
-  - - 0.9852
-    - 0.9694
-  - - 0.0297
-    - 0.7042
+zones: []
 risk:
   persist_seconds: 1.0
   cooldown_warning: 20
@@ -82,17 +71,17 @@ alerts:
   owner_voice_clip: ''
   speak_vlm: true
   toast: true
-  voice_name: Microsoft Zira Desktop - English (United States)
+  voice_name: ''
   voice_rate: 1
 detect:
   dog_conf: 0.18
   imgsz: 960
   hazard_conf: 0.25
 qa:
-  whisper_model: small.en      # clearer than base.en (one-time ~460 MB download); set base.en if slow
+  whisper_model: small.en
   hands_free: false
 ui:
-  theme: light
+  theme: dark
 behaviors:
   chewing:
     level: 2
