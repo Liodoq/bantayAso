@@ -326,7 +326,15 @@ def _teach_action(question, q, pipe, known, names):
 
 
 def answer(question: str, pipe) -> str:
-    """Return a short spoken answer. `pipe` is the running Pipeline."""
+    """Return a short spoken answer. `pipe` is the running Pipeline.
+    Yes/no questions lead with Yes / No / Not sure, then the reason (see yesno.py)."""
+    from .yesno import ensure_yes_no
+    reply = _answer(question, pipe)
+    _, q = strip_wake(question)
+    return ensure_yes_no(q, reply) if isinstance(reply, str) else reply
+
+
+def _answer(question: str, pipe) -> str:
     _, q = strip_wake(question)
     ql = q.lower()
     names = pipe.registry.names_by_tid if pipe.registry else {}
@@ -387,6 +395,10 @@ def answer(question: str, pipe) -> str:
     pipe._last_subject = subject or getattr(pipe, "_last_subject", None)
     if subject:
         pipe._last_subject_at = time.monotonic()
+    from .yesno import answer_yes_no
+    yn = answer_yes_no(ql, pipe, names, default, subject)   # "Is Oreo sleeping?" -> "Yes. ..." / "No. ..."
+    if yn:
+        return yn
     for fn in (lambda: _yes_no(ql, st, names, default, subject), lambda: _who_is(ql, st, names, default),
                lambda: _how_long(ql, pipe, subject, default), lambda: _last_time(ql, pipe, subject, default),
                lambda: _last_alert(ql, pipe)):

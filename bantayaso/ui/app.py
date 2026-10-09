@@ -1192,7 +1192,8 @@ class MainWindow(QMainWindow):
             self.heard_label.setText("Microphone audio is too quiet. Move closer or raise the input volume.")
             return
         if s.startswith("heard:"):
-            self.heard_label.setText(f"Heard: “{s[6:]}”")
+            said, _, raw = s[6:].partition("\x1f")
+            self.heard_label.setText(f"Heard: “{said}”" + (f"  (Whisper wrote “{raw}”)" if raw else ""))
             return
         hf = self.act_hf.isChecked()
         self.btn_bantay.setText({"listening": "Listening…", "thinking": "Thinking…",

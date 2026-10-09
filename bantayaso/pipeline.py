@@ -112,6 +112,9 @@ class Pipeline:
                 self.listener = Listener(config.MODELS_DIR, model=qa.get("whisper_model", "base.en"),
                                          language=qa.get("language", "en") or None,
                                          is_speaking=lambda: self.speaker.speaking, log=log)
+                self.listener.beam_size = int(qa.get("beam_size", 5))
+                # dog names are matched by sound after transcription ("Patchouchai" -> "Pachuchay")
+                self.listener.names_fn = lambda: list(self.registry.dogs.keys()) if self.registry else []
                 import threading as _th
                 _th.Thread(target=lambda: self.listener and self.listener._load(), daemon=True).start()
             except Exception as e:                # pragma: no cover

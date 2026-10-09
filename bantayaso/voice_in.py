@@ -36,6 +36,65 @@ def looks_hallucinated(text: str, prompt: str = "") -> bool:
     return len(raw) > 40 and len(raw) / max(1, len(zlib.compress(raw))) > 2.4
 
 
+def _sound_key(s: str) -> str:
+    """Rough 'how it sounds' spelling, so Whisper's guesses match a dog's name:
+    'Patchouchai', 'pa choo chay', 'Pachuchai' -> all close to 'Pachuchay'."""
+    import re
+    s = re.sub(r"[^a-z]", "", s.lower())
+    for a, b in (("tch", "C"), ("ch", "C"), ("ts", "C"), ("sh", "C"), ("j", "C"), ("ph", "f"), ("ck", "k"), ("qu", "k"),
+                 ("c", "k"), ("q", "k"), ("x", "ks"), ("z", "s"), ("oo", "u"), ("ou", "u"), ("ew", "u"),
+                 ("ay", "E"), ("ai", "E"), ("ei", "E"), ("ey", "E"), ("ee", "i"), ("ea", "i"), ("ie", "i"),
+                 ("y", "i"), ("h", ""), ("w", "u")):
+        s = s.replace(a, b)
+    return re.sub(r"(.)\1+", r"\1", s)
+
+
+def correct_names(text: str, names) -> str:
+    """Replace a mis-heard dog name (1-3 words that SOUND like it) with the real name."""
+    import difflib
+    import re
+    names = [n for n in names if n and len(_sound_key(n)) >= 3 and n.lower() not in ("bantay", "bantayaso")]
+    if not names or not text:
+        return text
+    stop = {"is", "are", "was", "were", "the", "a", "an", "what", "where", "how", "did", "does", "do", "on",
+            "in", "at", "my", "your", "and", "or", "it", "he", "she", "they", "si", "ang", "ba", "ni", "kay",
+            "sa", "na", "ng", "doing", "bantay", "bantayaso", "okay", "ok", "dog", "dogs", "brown", "white", "black",
+            "grey", "gray", "one", "two", "patch", "pooch", "puppy", "bed", "today", "now"}
+    words = re.findall(r"[A-Za-z][A-Za-z'\-]*|[^A-Za-z]+", text)
+    idx = [i for i, w in enumerate(words) if re.match(r"[A-Za-z]", w)]
+    out_spans = []
+    i = 0
+    while i < len(idx):
+        best = None
+        for n in names:
+            nk = _sound_key(n)
+            for span in (1, 2, 3):
+                if i + span > len(idx):
+                    continue
+                parts = [words[idx[k]] for k in range(i, i + span)]
+                if any(p.lower() in stop for p in parts):
+                    continue                              # "is", "the", "Bantay"... are never part of a name
+                cand = "".join(parts)
+                ck = _sound_key(cand)
+                if not ck or abs(len(ck) - len(nk)) > max(2, len(nk) // 3):
+                    continue
+                if cand.lower() == n.lower():
+                    r = 1.0
+                else:
+                    r = difflib.SequenceMatcher(None, ck, nk).ratio()
+                need = 0.8 if len(nk) >= 5 else 0.9
+                if r >= need and (best is None or r > best[0] + 0.02):
+                    best = (r, n, span)
+        if best:
+            out_spans.append((idx[i], idx[i + best[2] - 1], best[1]))
+            i += best[2]
+        else:
+            i += 1
+    for a, b, n in reversed(out_spans):
+        words[a:b + 1] = [n]
+    return "".join(words)
+
+
 def prepare_audio(audio):
     """Remove DC offset and apply bounded gain; never turn silence into loud noise."""
     audio=np.asarray(audio,dtype=np.float32)
@@ -61,6 +120,9 @@ class Listener:
         self.on_text = None                      # callback(text, wake_word_heard: bool)
         self.on_state = None                     # callback("listening" / "thinking" / "idle")
         self.vocab = ["Bantay", "BantayAso"]     # spelling hints for Whisper (dog names added later)
+        self.names_fn = lambda: [v for v in self.vocab if v.lower() not in ("bantay", "bantayaso")]
+        self.beam_size = 5                       # more careful decoding than greedy (slightly slower)
+        self.last_raw = ""                       # exactly what Whisper wrote, before name correction
         self.on_heard = None                     # callback(text) for every hands-free utterance (debug view)
         self.level = 0.0
         self.recording_speech = False
@@ -97,10 +159,10 @@ class Listener:
             self._state("too_quiet")
             return ""
         model = self._load()
-        kw = dict(language=self.language, fp16=getattr(self, "_fp16", False), beam_size=1,
+        kw = dict(language=self.language, fp16=getattr(self, "_fp16", False), beam_size=self.beam_size,
                   condition_on_previous_text=False, temperature=0.0, no_speech_threshold=0.6)
+        names = list(dict.fromkeys(self.names_fn() or []))
         if hint:     # dog names help spelling; only for push-to-talk (hands-free would echo it)
-            names = [v for v in dict.fromkeys(self.vocab) if v.lower() not in ("bantay", "bantayaso")]
             if names:
                 kw["initial_prompt"] = "My dogs are " + ", ".join(names) + "."
         res = model.transcribe(audio.astype(np.float32), **kw)
@@ -110,7 +172,13 @@ class Listener:
         if segs and sum(sg.get("avg_logprob", 0) for sg in segs) / len(segs) < -1.2:
             return ""                                    # very unsure: probably noise
         text = (res.get("text") or "").strip()
-        return "" if looks_hallucinated(text, kw.get("initial_prompt", "")) else text
+        if looks_hallucinated(text, kw.get("initial_prompt", "")):
+            return ""
+        self.last_raw = text
+        fixed = correct_names(text, names)
+        if fixed != text:
+            self.log(f"[BantayAso] heard {text!r} -> understood {fixed!r}")
+        return fixed
 
     # ---------------- recording ----------------
     def record_utterance(self, max_s: float = 12.0, wait_s: float = 6.0, hands_free: bool = False) -> np.ndarray | None:
@@ -213,7 +281,7 @@ class Listener:
                     continue
                 self.log(f"[BantayAso] heard (ignored unless it starts with \"Bantay\"): {text!r}")
                 if self.on_heard:
-                    self.on_heard(text)
+                    self.on_heard(text if text == self.last_raw else f"{text}\x1f{self.last_raw}")
                 woke, rest = strip_wake(text, strict=True)      # wake word must START the sentence
                 if woke and not rest:
                     # bare "Bantay": answer "Yes?" and treat the next sentence as the question
