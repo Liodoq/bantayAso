@@ -104,6 +104,9 @@ class Pipeline:
             self.registry = DogRegistry(config.DATA_DIR / "dogs", threshold=nm.get("threshold", 0.80),
                                         margin=nm.get("margin", 0.02))
         self.history = ActivityHistory(10)
+        # "It's safe" on a chewing alert: stop alerting for this chewing episode and remember the look
+        from .safe_chews import SafeChews
+        self.safe_chews = SafeChews(config.DATA_DIR / "safe_chews.npy")
         from .persona import Persona
         self.persona = Persona(config.DATA_DIR, llm_call=self._chat)
         self._ask_lock = threading.Lock()
@@ -149,6 +152,7 @@ class Pipeline:
         self.aligner = ZoneAligner(config.DATA_DIR / "zones_ref.png")   # follows a bumped/re-angled camera
         self._last_frame = None
         self.engine = RiskEngine(cfg)
+        self.engine.safe_chew_fn = self._safe_chew
         self.events = EventLog(config.DATA_DIR / "events.db", config.DATA_DIR / "snapshots")
         self.speaker = Speaker(rate=int(al.get("voice_rate", 1)), voice=al.get("voice_name", ""))
         self.voice = bool(al.get("voice", True))
@@ -603,12 +607,42 @@ class Pipeline:
         return ans
 
     # ------------------------------------------------------------------
+    def _safe_chew(self, tid: int) -> bool:
+        emb = getattr(self.classifier, "embeddings", {}).get(tid) if self.classifier else None
+        return self.safe_chews.is_safe(tid, emb)
+
+    def mark_chewing_safe(self, ev: dict) -> str:
+        """Owner pressed "It's safe": no more alerts for this chewing; learn the look and named objects."""
+        tid = ev.get("track_id")
+        emb = getattr(self.classifier, "embeddings", {}).get(tid) if self.classifier else None
+        learned = self.safe_chews.add(tid, emb)
+        made_safe = []
+        for name in ev.get("near") or []:                 # a named object near the mouth -> harmless
+            if self.engine.vocab_tiers.get(name, 0) in (1, 2):
+                made_safe.append(name)
+        if made_safe:
+            cfg = config.load()
+            hz = dict(cfg.get("hazards") or {})
+            for n in made_safe:
+                hz[n] = 0
+            cfg["hazards"] = hz
+            config.save(cfg)
+            self.request_vocab(hz)
+        who = getattr(self, "names", {}).get(tid) or self.dog_name
+        bits = []
+        if learned:
+            bits.append(f"I'll remember that this kind of chewing by {who} is okay")
+        if made_safe:
+            bits.append(f"marked {', '.join(made_safe)} as safe on the Things page")
+        return ("Okay. " + " and ".join(bits) + ".") if bits else "Okay, I'll stop alerting for this chewing."
+
     def _fire(self, a, frame, dogs) -> None:
         who = getattr(self, "names", {}).get(a.track_id)
         text = phrase(a.level, a.reason, who or self.dog_name)
         ev_id = self.events.add(a, frame, dog_label=who)
         ev = {"id": ev_id, "level": a.level, "text": text, "reason": a.reason, "vlm": None,
-              "ts": time.time()}
+              "ts": time.time(), "track_id": a.track_id, "near": list(a.near or []),
+              "chewing": bool(getattr(a, "chewing", False)) or "chew" in a.reason or "eating" in a.reason}
         self.state.last_alert = ev
         self.log(f"[ALERT {LEVELS[a.level].upper()}] {time.strftime('%H:%M:%S')} {text}")
         if not self.dnd:

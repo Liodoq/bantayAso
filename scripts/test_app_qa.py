@@ -17,9 +17,9 @@ class AppQuestionsTests(unittest.TestCase):
                   'zones':[],'zones_reliable':True})
     def test_events_paginate(self):
         p=self.pipe();a=app_answer('Read the events',p)
-        self.assertEqual(a.count('Warning for Oreo'),3)
+        self.assertEqual(a.count('Oreo was'),3)
         self.assertIn('read more events',a)
-        self.assertEqual(app_answer('Read more events',p).count('Warning for Oreo'),2)
+        self.assertEqual(app_answer('Read more events',p).count('Oreo was'),2)
         self.assertIn('no more',app_answer('Read more events',p))
     def test_screen_question(self):
         a=app_answer('What is in your screen?',self.pipe())

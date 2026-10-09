@@ -4,19 +4,53 @@ import time
 from .scene import scene_answer
 
 
-def event_page(pipe,rows,start=0):
-    page=rows[start:start+3]
+WORDNUM={'one':1,'two':2,'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,'nine':9,'ten':10}
+
+
+def wanted_count(q):
+    """'the recent event' -> 1, 'last 2 events' / 'two events' -> 2, plain 'events' -> 3 (a page)."""
+    m=re.search(r'\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:\w+\s+)?(events?|alerts?|warnings?)',q)
+    if m:
+        n=int(m.group(1)) if m.group(1).isdigit() else WORDNUM[m.group(1)]
+        return max(1,min(n,10))
+    if re.search(r'\b(event|alert|warning)\b(?!s)',q) and not re.search(r'\b(all|every|list)\b',q):
+        return 1
+    return 3
+
+
+def one_event(e):
+    today=time.strftime('%Y%m%d')==time.strftime('%Y%m%d',time.localtime(e['ts']))
+    clock=time.strftime('%I:%M %p',time.localtime(e['ts'])).lstrip('0')
+    when=f"at {clock}" if today else time.strftime('on %b %d at ',time.localtime(e['ts'])).replace(' 0',' ')+clock
+    who=e.get('dog') or ''
+    who=who if who and not str(who).lstrip('-').isdigit() else 'an unidentified dog'
+    what=(e.get('reason') or e.get('action') or 'activity needing attention').split(' - ')[0]
+    return f"{'Danger' if e['level']>=3 else 'Warning'} {when}: {who} was {what}."
+
+
+def event_page(pipe,rows,start=0,size=3):
+    page=rows[start:start+size]
     pipe._event_readout=(rows,start+len(page))
     if not page: return 'There are no more recorded events in this list.'
-    lines=[]
-    for e in page:
-        clock=time.strftime('%b %d at %I:%M %p',time.localtime(e['ts'])).replace(' 0',' ')
-        who=e.get('dog') or ''
-        who=who if not who.lstrip('-').isdigit() else 'an unidentified dog'
-        level='Danger' if e['level']>=3 else 'Warning'
-        lines.append(f"{clock}. {level} for {who or 'an unidentified dog'}: {e.get('reason') or e.get('action') or 'activity needing attention'}.")
+    lines=[one_event(e) for e in page]
     if start+len(page)<len(rows): lines.append('Say read more events to continue.')
     return ' '.join(lines)
+
+
+def events_reply(pipe,rows,n,today,q=''):
+    if re.match(r'(any|are there|were there|did .* have|have there been)\b',q):     # yes/no: say so, then the latest
+        pipe._event_readout=(rows,1)
+        return (f"Yes, {len(rows)} recorded{' today' if today else ''}. The latest: "+one_event(rows[0])
+                +(' Say read more events for the others.' if len(rows)>1 else ''))
+    if n==1:
+        pipe._event_readout=(rows,1)
+        more=' Say read more events for older ones.' if len(rows)>1 else ''
+        return 'The most recent event: '+one_event(rows[0])+more
+    if n!=3:
+        pipe._event_readout=(rows,min(n,len(rows)))
+        head=f"The last {min(n,len(rows))} events: "
+        return head+' '.join(one_event(e) for e in rows[:n])+(' Say read more events to continue.' if len(rows)>n else '')
+    return ('Here are the most recent recorded events. ' if not today else "Here are today's most recent recorded events. ")+event_page(pipe,rows)
 
 
 LEVEL_WORD = {0: 'Safe', 1: 'Watch', 2: 'Warning', 3: 'Danger'}
@@ -117,8 +151,8 @@ def app_answer(question,pipe):
             rows=pipe.events.recent(dog=dog,today=today)
         else:
             rows=[e for e in pipe.events.today() if not e.get('false_alarm') and (not dog or e.get('dog')==dog)]
-        if not rows:return 'No matching events are recorded' + (' today.' if today else '.')
-        return ('Here are the most recent recorded events. ' if not today else "Here are today's most recent recorded events. ")+event_page(pipe,rows)
+        if not rows:return ('No. ' if re.match(r'(any|are there|were there)\b',q) else '')+'No matching events are recorded' + (' today.' if today else '.')
+        return events_reply(pipe,rows,wanted_count(q),today,q)
     if re.search(r'what.*(screen|camera view|can you see|do you see)|describe.*(screen|scene|view)|what is in your screen',q):
         snap=getattr(pipe,'scene',None)
         if not snap or time.monotonic()-snap['at']>3:return 'I do not have a fresh camera view right now.'

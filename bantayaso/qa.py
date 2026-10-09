@@ -344,6 +344,14 @@ def _answer(question: str, pipe) -> str:
     taught = _teach_action(question, q, pipe, known, dict(names))
     if taught is not None:
         return taught
+    # answering a chewing alert by voice: "Bantay, it's safe" / "Bantay, I've got it"
+    la = getattr(getattr(pipe, "state", None), "last_alert", None)
+    if la and la.get("chewing") and time.time() - la.get("ts", 0) < 120:
+        if re.fullmatch(r"(it'?s|that'?s|it is|that is)\s+(safe|okay|ok|fine|a toy|just a toy)[.! ]*|safe (yan|lang)[.! ]*", ql):
+            if hasattr(pipe, "mark_chewing_safe"):
+                return pipe.mark_chewing_safe(la)
+        if re.fullmatch(r"(i'?ve got it|i got it|got it|i'?ll check|i'?m on it|sige)[.! ]*", ql):
+            return "Okay. I'll keep reminding you until the chewing stops or the object is gone."
     if not re.sub(r"[\W_]+", "", q):                    # just "Bantay" / "Bantay?" -> short reply, then listen
         return "Yes?"
     # small talk the assistant should handle itself

@@ -95,7 +95,7 @@ class MainWindow(QMainWindow):
 
     CONFIRM = {"Save settings": "Saved ✓", "Save zones": "Zones saved ✓", "Finish zone": "Zone added ✓",
                "Undo point": "Undone ✓", "Delete last zone": "Deleted ✓", "Reset taught actions": "Reset ✓",
-               "Forget dog": "Forgotten ✓", "I've got it": "Got it ✓", "Snooze 5 min": "Snoozed ✓",
+               "Forget dog": "Forgotten ✓", "I've got it": "Got it ✓", "It's safe": "Learned ✓", "Snooze 5 min": "Snoozed ✓",
                "Mark false alarm": "Marked ✓", "Undo false alarm": "Restored ✓", "Open snapshot": "Opening…",
                "Save && apply": "Applied ✓", "Add / update": "Updated ✓", "Remove": "Removed ✓",
                "Use this camera": "Switching…", "Test voice": "Speaking…", "Refresh list": "Searching…"}
@@ -300,16 +300,24 @@ class MainWindow(QMainWindow):
         self.spoken.hide()
         btns = QHBoxLayout()
         self.btn_ack = QPushButton("I've got it", objectName="primary")
+        self.btn_safe = QPushButton("It's safe")
+        self.btn_safe.setToolTip("The dog is chewing something harmless: stop this alert and remember it")
+        self.btn_ack.setToolTip("I'm checking it. Bantay keeps reminding you until the chewing stops")
+        self.btn_safe.clicked.connect(self.chewing_is_safe)
         self.btn_snooze = QPushButton("Snooze 5 min")
         self.btn_cam = QPushButton("Choose another camera", objectName="primary")
         self.btn_ack.clicked.connect(self.acknowledge)
         self.btn_snooze.clicked.connect(self.snooze)
         self.btn_cam.clicked.connect(lambda: self.go(P_SETTINGS))
-        for b in (self.btn_ack, self.btn_snooze, self.btn_cam):
+        for b in (self.btn_safe, self.btn_ack, self.btn_snooze, self.btn_cam):
             btns.addWidget(b)
+        self.status_note = lbl("", "muted", wrap=True)      # answer after "It's safe" / "I've got it"
+        self.status_note.hide()
+        self._note_until = 0.0
         for w in (self.level_pill, self.status_title, self.status_sub, self.spoken):
             sc.addWidget(w)
         sc.addLayout(btns)
+        sc.addWidget(self.status_note)
         right.addWidget(self.status_card)
 
         ask_card = card()
@@ -1067,8 +1075,12 @@ class MainWindow(QMainWindow):
             self.spoken.show()
         else:
             self.spoken.hide()
+        chewing = bool(alert and alert.get("chewing"))
+        self.btn_safe.setVisible(hot and not camera and chewing)   # chewing alert: "It's safe" or "I've got it"
         self.btn_ack.setVisible(hot and not camera)
-        self.btn_snooze.setVisible(hot and not camera)
+        self.btn_snooze.setVisible(hot and not camera and not chewing)
+        if self.status_note.isVisible() and time.time() > self._note_until:
+            self.status_note.hide()
         self.btn_cam.setVisible(camera)
 
     def on_event(self, ev: dict):
@@ -1107,10 +1119,33 @@ class MainWindow(QMainWindow):
         self.subtitle.setText("Do not disturb: alerts are logged silently" if on else
                               f"Live since {time.strftime('%I:%M %p').lstrip('0')}")
 
+    def _note(self, text: str, seconds: float = 8.0):
+        self.status_note.setText(text)
+        self.status_note.show()
+        self._note_until = time.time() + seconds
+
     def acknowledge(self):
         la = self.worker.pipe.state.last_alert if self.worker.pipe else None
         if la:
             self.ack_alert_id = la["id"]
+            if la.get("chewing"):                       # not safe: keep reminding until it stops
+                self._note("Okay. I'll keep reminding you until the chewing stops or the object is gone.")
+
+    def chewing_is_safe(self):
+        pipe = self.worker.pipe
+        la = pipe.state.last_alert if pipe else None
+        if not la:
+            return
+        self.ack_alert_id = la["id"]
+        msg = pipe.mark_chewing_safe(la)
+        self._note(msg, 10)
+        if pipe.voice and not pipe.dnd:
+            pipe.speaker.say(msg, urgent=False)
+        try:                                            # a named object became "Ignore": refresh Things page
+            self.things = dict(config.load().get("hazards") or {})
+            self.refresh_things()
+        except Exception:
+            pass
 
     def snooze(self):
         self.acknowledge()

@@ -103,6 +103,7 @@ class RiskEngine:
         self.mouth_thr = float(r.get("mouth_threshold", 0.65))       # with head/jaw motion
         self.mouth_alone = float(r.get("mouth_alone_threshold", 0.85))  # without a chew label
         self.chew_min_s = float(r.get("chew_min_seconds", 5.0))      # user: notify after 5-10 s
+        self.safe_chew_fn = None        # fn(track_id) -> True when the owner said this chewing is safe
         self.chew_head = float(r.get("chew_head_threshold", 0.35))
         self.eat_thr = float(r.get("eat_score_threshold", 0.36))
         self.selfcare_max = float(r.get("self_care_max_score", 0.45))
@@ -293,8 +294,12 @@ class RiskEngine:
                     add(self.lvl("rough_play"), "playing rough - may turn into a fight")
 
             # ---------- behaviour rules ----------
+            owner_safe = bool(chewing and self.safe_chew_fn and not any(hz.tier >= 2 for hz in near)
+                              and not in_mouth and self.safe_chew_fn(tid))
             if chewing and calm_zone and not any(hz.tier >= 2 for hz in near) and not in_mouth:
                 pass                                         # eating at the bowl / chewing toys: normal
+            elif owner_safe:
+                pass                                         # owner pressed "It's safe" for this chewing
             elif chewing:
                 named = [hz for hz in near]
                 if not named and not in_mouth:
@@ -327,6 +332,8 @@ class RiskEngine:
                 reason = tr.alert_reason                     # level still cooling down: keep the real cause
             elif chewing and calm_zone:
                 reason = ("eating " if zone_hit.type == "food" else "chewing ") + zone_phrase(zone_hit)
+            elif owner_safe:
+                reason = "chewing something you said is safe"
             elif label in CALM_TEXT:
                 reason = CALM_TEXT[label] + (" " + zone_phrase(zone_hit) if zone_hit and zone_hit.type in ("bed", "food", "play") else "")
             elif motion == "still":

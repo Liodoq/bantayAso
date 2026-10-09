@@ -27,9 +27,10 @@ def check(name, cond, info=""):
 def make(level_choco=0, reason_choco="just lying down", events=()):
     d = Path(tempfile.mkdtemp())
     hist = ActivityHistory()
+    hist._last = -1e12                         # allow sample times before this machine's boot
     now = time.monotonic()
     for i in range(240):                        # 4 minutes: Pachuchay ate for 60 s, then lay down; Oreo slept
-        hist.record(now - 240 + i, [Assessment(1, 0, 0, "eating" if 60 <= i < 120 else "just lying down", zone="Bed 1"),
+        hist.record(now - 243 + i * 1.01, [Assessment(1, 0, 0, "eating" if 60 <= i < 120 else "just lying down", zone="Bed 1"),
                                     Assessment(2, 0, 0, "sleeping")], {1: "Pachuchay", 2: "Oreo"})
     log = EventLog(d / "e.db", d / "s")
     for lvl, r in events:
