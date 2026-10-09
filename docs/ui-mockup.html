@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BantayAso UI Mockup</title>
+<style>
+:root{
+  --bg:#0E0B09; --surface:#17110D; --panel:#211812; --raised:#2B2019; --line:#3A2C22;
+  --brown:#8B5E3C; --caramel:#C8894E; --cream:#F2E6D8; --muted:#A8957F; --faint:#6E5D4E;
+  --safe:#7FB98A; --watch:#E3B54F; --warn:#E3803F; --danger:#E0533F;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--cream);font:14px/1.45 "Segoe UI Variable","Segoe UI",system-ui,sans-serif;padding:24px 16px}
+.wrap{max-width:1180px;margin:0 auto}
+.tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.tabs button{background:var(--panel);color:var(--muted);border:1px solid var(--line);padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit}
+.tabs button.on{background:var(--caramel);color:#1A120C;border-color:var(--caramel);font-weight:600}
+.note{color:var(--faint);font-size:12px;margin-bottom:14px}
+.app{display:grid;grid-template-columns:200px 1fr;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;min-height:640px}
+.side{background:#120D0A;border-right:1px solid var(--line);padding:18px 12px;display:flex;flex-direction:column;gap:4px}
+.logo{display:flex;align-items:center;gap:10px;padding:4px 8px 18px}
+.logo .paw{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--caramel),var(--brown));display:grid;place-items:center;font-size:18px}
+.logo b{font-size:16px;letter-spacing:.2px}.logo small{display:block;color:var(--faint);font-size:11px}
+.nav{padding:9px 10px;border-radius:8px;color:var(--muted);display:flex;gap:10px;align-items:center}
+.nav.on{background:var(--raised);color:var(--cream);box-shadow:inset 3px 0 0 var(--caramel)}
+.side .foot{margin-top:auto;font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--safe);margin-right:6px}
+.main{padding:20px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.top h1{font-size:20px;font-weight:600}.top p{color:var(--muted);font-size:12px}
+.pills{display:flex;gap:8px;flex-wrap:wrap}
+.pill{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:12px;color:var(--muted)}
+.pill.on{color:var(--cream);border-color:var(--brown)}
+.grid{display:grid;grid-template-columns:1fr 300px;gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card h3{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:600;margin-bottom:10px}
+.video{position:relative;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:
+  radial-gradient(ellipse at 30% 80%,#3b2a1e 0,transparent 55%),radial-gradient(ellipse at 75% 70%,#2c2119 0,transparent 50%),linear-gradient(#1d1611,#0f0b08)}
+.floor{position:absolute;inset:62% 0 0 0;background:linear-gradient(#2a1f17,#1a130e)}
+.zone{position:absolute;border:2px dashed;border-radius:6px;font-size:11px;padding:2px 6px}
+.z-bed{left:6%;top:56%;width:24%;height:30%;border-color:var(--safe);color:var(--safe);background:#7fb98a14}
+.z-trash{left:66%;top:44%;width:24%;height:42%;border-color:var(--danger);color:var(--danger);background:#e0533f14}
+.box{position:absolute;border:2px solid;border-radius:4px}
+.box span{position:absolute;top:-22px;left:-2px;font-size:11px;padding:2px 6px;border-radius:4px;white-space:nowrap;color:#120d0a;font-weight:600}
+.b-dog{left:52%;top:46%;width:22%;height:38%;border-color:var(--warn)}.b-dog span{background:var(--warn)}
+.b-obj{left:71%;top:68%;width:7%;height:10%;border-color:var(--danger)}.b-obj span{background:var(--danger)}
+.dogshape{position:absolute;left:55%;top:55%;width:16%;height:24%;background:#5a3e2a;border-radius:45% 55% 40% 50%;opacity:.8}
+.hud{position:absolute;left:10px;bottom:10px;display:flex;gap:6px}
+.hud i{font-style:normal;font-size:11px;background:#0e0b09cc;border:1px solid var(--line);padding:3px 8px;border-radius:6px;color:var(--muted)}
+.live{position:absolute;right:10px;top:10px;font-size:11px;background:#0e0b09cc;padding:3px 8px;border-radius:6px}
+.live::before{content:"";display:inline-block;width:7px;height:7px;background:var(--danger);border-radius:50%;margin-right:6px}
+.meter{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:12px}
+.meter div{height:8px;border-radius:4px;background:var(--raised)}
+.meter .a1{background:var(--safe)}.meter .a2{background:var(--watch)}.meter .a3{background:var(--warn)}
+.legend{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);margin-top:6px}
+.status{border-radius:12px;padding:16px;background:linear-gradient(160deg,#3a2216,#211812);border:1px solid #6b3a22}
+.status .lvl{display:inline-flex;align-items:center;gap:8px;background:var(--warn);color:#1a0f08;font-weight:700;padding:4px 10px;border-radius:999px;font-size:12px}
+.status h2{font-size:18px;margin:10px 0 4px;font-weight:600}
+.status p{color:var(--muted);font-size:13px}
+.say{margin-top:12px;background:#0e0b0999;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px}
+.say b{color:var(--caramel)}
+.row{display:flex;gap:8px;margin-top:12px}
+.btn{flex:1;border:1px solid var(--line);background:var(--raised);color:var(--cream);border-radius:9px;padding:9px;font:inherit;font-size:13px;cursor:pointer}
+.btn.pri{background:var(--caramel);border-color:var(--caramel);color:#1a120c;font-weight:600}
+.ev{display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.ev:first-of-type{border-top:0}
+.thumb{width:46px;height:34px;border-radius:6px;background:linear-gradient(135deg,#4a3324,#1d1510);flex:none;position:relative}
+.thumb::after{content:"";position:absolute;right:3px;top:3px;width:8px;height:8px;border-radius:50%;background:var(--c)}
+.ev b{font-size:13px;font-weight:600;display:block}.ev small{color:var(--faint);font-size:11px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.stat b{font-size:24px;display:block;font-weight:600}.stat small{color:var(--muted);font-size:12px}
+.tl{display:grid;grid-template-columns:1fr 340px;gap:16px}
+.item{display:grid;grid-template-columns:70px 96px 1fr auto;gap:12px;align-items:center;padding:10px;border-radius:10px;border:1px solid transparent}
+.item.sel{background:var(--raised);border-color:var(--brown)}
+.item .t{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.item .th{height:56px;border-radius:8px;background:linear-gradient(135deg,#4a3324,#1d1510)}
+.tag{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;color:#160f0a}
+.big{aspect-ratio:4/3;border-radius:10px;background:radial-gradient(ellipse at 60% 60%,#4a3324 0,#140f0b 70%);position:relative;margin-bottom:12px}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;font-size:13px}.kv span{color:var(--muted)}
+.bar{display:flex;align-items:flex-end;gap:5px;height:90px;margin-top:8px}
+.bar div{flex:1;background:var(--brown);border-radius:3px 3px 0 0;opacity:.85}
+.bar div.hot{background:var(--caramel)}
+.hours{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:4px}
+.hide{display:none}
+@media (max-width:900px){.app{grid-template-columns:1fr}.side{display:none}.grid,.tl{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.item{grid-template-columns:56px 1fr auto}.item .th{display:none}}
+</style></head><body><div class="wrap">
+<div class="tabs"><button class="on" data-s="mon">1 · Live Monitor</button><button data-s="evt">2 · Events Timeline</button></div>
+
+<!-- SCREEN 1 -->
+<div class="app" id="mon">
+ <aside class="side">
+  <div class="logo"><div class="paw">🐾</div><div><b>BantayAso</b><small>Local AI dog watcher</small></div></div>
+  <div class="nav on">◉ Monitor</div><div class="nav">☰ Events</div><div class="nav">▢ Zones</div><div class="nav">⚙ Settings</div>
+ </aside>
+ <main class="main">
+  <div class="top"><div><h1>Watching Choco</h1><p>Live since 2:05 PM</p></div>
+   <div class="pills"><span class="pill on">🔊 Voice on</span><span class="pill">🌙 Do not disturb</span><span class="pill">⤓ Minimize to tray</span></div></div>
+  <div class="grid">
+   <div class="card">
+    <div class="video"><div class="floor"></div>
+     <div class="zone z-bed">Bed zone</div><div class="zone z-trash">Trash zone</div>
+     <div class="dogshape"></div>
+     <div class="box b-dog"><span>dog · chewing 0.82</span></div>
+     <div class="box b-obj"><span>slipper</span></div>
+     <div class="live">LIVE</div>
+    </div>
+    <div class="meter"><div class="a1"></div><div class="a2"></div><div class="a3"></div><div></div></div>
+    <div class="legend"><span>Safe</span><span>Watch</span><span>Warning</span><span>Danger</span></div>
+   </div>
+   <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="status"><span class="lvl">● WARNING</span>
+     <h2>Chewing a slipper</h2><p>Inside trash zone · 6 s · motion: active</p>
+     <div class="say"><b>Spoken:</b> “Hoy! Choco is chewing a slipper near the trash can.”</div>
+     <div class="row"><button class="btn pri">I've got it</button><button class="btn">Snooze 5 min</button></div>
+    </div>
+    <div class="card"><h3>Recent</h3>
+     <div class="ev"><div class="thumb" style="--c:var(--warn)"></div><div><b>Chewing slipper</b><small>2:51 PM · Warning</small></div></div>
+     <div class="ev"><div class="thumb" style="--c:var(--watch)"></div><div><b>Sniffing near trash</b><small>2:47 PM · Watch</small></div></div>
+     <div class="ev"><div class="thumb" style="--c:var(--safe)"></div><div><b>Sleeping on bed</b><small>2:10 PM · Safe</small></div></div>
+    </div>
+   </div>
+  </div>
+ </main>
+</div>
+
+<!-- SCREEN 2 -->
+<div class="app hide" id="evt">
+ <aside class="side">
+  <div class="logo"><div class="paw">🐾</div><div><b>BantayAso</b><small>Local AI dog watcher</small></div></div>
+  <div class="nav">◉ Monitor</div><div class="nav on">☰ Events</div><div class="nav">▢ Zones</div><div class="nav">⚙ Settings</div>
+ </aside>
+ <main class="main">
+  <div class="top"><div><h1>Today, Oct 9</h1><p>5 alerts so far</p></div>
+   <div class="pills"><span class="pill on">All</span><span class="pill">Danger</span><span class="pill">Warning</span><span class="pill">Watch</span></div></div>
+  <div class="stats">
+   <div class="card stat"><b>5h 12m</b><small>Watched</small></div>
+   <div class="card stat"><b style="color:var(--danger)">1</b><small>Danger</small></div>
+   <div class="card stat"><b style="color:var(--warn)">4</b><small>Warnings</small></div>
+   <div class="card stat"><b>Trash zone</b><small>Hotspot</small></div>
+  </div>
+  <div class="tl">
+   <div class="card"><h3>Timeline</h3>
+    <div class="item sel"><span class="t">3:42 PM</span><div class="th"></div><div><b>Mouth near battery</b><br><small style="color:var(--faint)">Danger zone · “possibly in mouth” for 3 s</small></div><span class="tag" style="background:var(--danger)">DANGER</span></div>
+    <div class="item"><span class="t">2:51 PM</span><div class="th"></div><div><b>Chewing slipper</b><br><small style="color:var(--faint)">Trash zone · 6 s</small></div><span class="tag" style="background:var(--warn)">WARNING</span></div>
+    <div class="item"><span class="t">1:20 PM</span><div class="th"></div><div><b>Digging at trash can</b><br><small style="color:var(--faint)">Trash zone · frantic motion</small></div><span class="tag" style="background:var(--warn)">WARNING</span></div>
+    <div class="item"><span class="t">11:05 AM</span><div class="th"></div><div><b>Scratching sofa</b><br><small style="color:var(--faint)">No-go zone · 4 s</small></div><span class="tag" style="background:var(--warn)">WARNING</span></div>
+    <div class="card" style="margin-top:12px;background:var(--surface)"><h3>Alerts by hour</h3>
+     <div class="bar"><div style="height:20%"></div><div style="height:35%"></div><div style="height:15%"></div><div style="height:55%"></div><div class="hot" style="height:90%"></div><div style="height:40%"></div><div style="height:25%"></div><div style="height:10%"></div></div>
+     <div class="hours"><span>9 AM</span><span>11</span><span>1 PM</span><span>3</span><span>5 PM</span></div></div>
+   </div>
+   <div class="card"><h3>Selected event</h3>
+    <div class="big"><div class="box" style="left:30%;top:30%;width:40%;height:50%;border-color:var(--danger)"><span style="background:var(--danger)">dog · eating 0.77</span></div></div>
+    <div class="kv"><span>Level</span><b style="color:var(--danger)">Danger</b><span>Activity</span><b>Eating / chewing</b><span>Near</span><b>battery (last seen 1.2 s ago)</b><span>Zone</span><b>Danger tray</b></div>
+    <div class="say"><b>Local AI says:</b> “The dog is biting at a small object on the floor that looks like a battery. Check its mouth now.”</div>
+    <div class="row"><button class="btn">Open snapshot</button><button class="btn">Mark false alarm</button></div>
+   </div>
+  </div>
+ </main>
+</div>
+</div>
+<script>
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+ ['mon','evt'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==b.dataset.s));
+});
+</script>
+</body></html>

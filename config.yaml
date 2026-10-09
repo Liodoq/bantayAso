@@ -1,0 +1,55 @@
+camera:
+  type: device
+  index: 1
+  backend: msmf
+  width: 1280
+  height: 720
+  fps: 30
+models:
+  device: auto
+  dog_detector: yolo11n.pt
+  hazard_detector: yoloe-11s-seg.pt
+  clip_source: openai-clip
+  clip_openai_name: ViT-B/32
+  clip_model: ViT-B-32
+  clip_pretrained: laion2b_s34b_b79k
+  vlm: moondream
+  ollama_url: http://localhost:11434
+hazards:
+  battery: 3
+  phone charger cable: 3
+  electric cord: 3
+  medicine pill: 3
+  pill bottle: 3
+  plastic bag: 3
+  chocolate: 3
+  slipper: 2
+  shoe: 2
+  sock: 2
+  remote control: 2
+  trash can: 2
+  toy: 1
+actions:
+- sleeping
+- lying down
+- sitting
+- standing
+- walking
+- sniffing the floor
+- chewing something
+- eating
+- digging
+- scratching itself
+- scratching furniture
+- jumping on furniture
+zones: []
+risk:
+  persist_seconds: 1.0
+  cooldown_warning: 20
+  cooldown_danger: 5
+  last_seen_memory_seconds: 5
+  muzzle_near_px: 60
+alerts:
+  voice: true
+  do_not_disturb: false
+  owner_voice_clip: ''
