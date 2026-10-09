@@ -13,6 +13,7 @@ import numpy as np
 from . import config, overlay
 from .alerts import Speaker, phrase, play_clip, toast
 from .events import EventLog
+from .history import ActivityHistory
 from .motion import MotionMeter
 from .risk import LEVELS, RiskEngine
 from .zones import ZoneEditor, load_zones, zones_to_cfg
@@ -27,6 +28,8 @@ class State:
     fps: float = 0.0
     timings: dict = field(default_factory=dict)
     last_alert: dict | None = None        # {"id", "level", "text", "vlm", "ts"}
+    boxes: list = field(default_factory=list)   # [(track_id, box, name)]
+    frame_w: int = 1280
 
 
 class Pipeline:
@@ -66,6 +69,25 @@ class Pipeline:
             self.vlm = VLMWorker(cfg["models"].get("ollama_url", "http://localhost:11434"),
                                  cfg["models"].get("vlm", "moondream"))
 
+        self.registry = None
+        if self.classifier is not None:
+            from .names import DogRegistry
+            nm = cfg.get("names", {})
+            self.registry = DogRegistry(config.DATA_DIR / "dogs", threshold=nm.get("threshold", 0.80),
+                                        margin=nm.get("margin", 0.02))
+        self.history = ActivityHistory(10)
+        qa = cfg.get("qa", {})
+        self.qa_model = qa.get("model", "qwen2.5:1.5b")
+        self.ollama_url = cfg["models"].get("ollama_url", "http://localhost:11434")
+        self.listener = None
+        if qa.get("enabled", True):
+            try:
+                from .voice_in import Listener
+                self.listener = Listener(config.MODELS_DIR, model=qa.get("whisper_model", "base"),
+                                         language=qa.get("language", "en") or None,
+                                         is_speaking=lambda: self.speaker.speaking, log=log)
+            except Exception as e:                # pragma: no cover
+                log(f"[BantayAso] voice questions unavailable: {e}")
         self.motion = MotionMeter()
         self.zones = load_zones(cfg)
         self.editor = ZoneEditor(self.zones)
@@ -118,7 +140,13 @@ class Pipeline:
             self._last_act = now
         for tid, (lvl, en) in motions.items():
             if tid in self._actions:
-                self._actions[tid].motion, self._actions[tid].energy = lvl, en
+                r = self._actions[tid]
+                r.motion, r.energy = lvl, en
+                # scratching/digging/jumping are vigorous: if the dog is still, CLIP's vote for
+                # them is noise (seen in calibration), so fall back to the best calm pose
+                from .actions import MOTION_LABELS
+                if r.label in MOTION_LABELS and lvl == "still" and r.pose:
+                    r.label = r.pose
 
         if self.hazard_det is not None and now - self._last_zoom >= 1.0:   # mouth zoom, 1x/s
             chewers = [d for d in dogs if d.track_id in self._actions and
@@ -132,7 +160,21 @@ class Pipeline:
 
         found = self.engine.update(dogs, hz, self.zones, (w, h), hazards_fresh=fresh,
                                    actions=self._actions if self.classifier else None)
+        names = {}
+        if self.registry is not None:
+            for old, new in self.engine.handovers:
+                self.registry.handover(old, new)
+            if st.timings.get("_act_t") != self._last_act:          # new embeddings this frame
+                st.timings["_act_t"] = self._last_act
+                emb = {d.track_id: self.classifier.embeddings[d.track_id] for d in dogs
+                       if d.track_id in self.classifier.embeddings}
+                self.registry.update(emb, {d.track_id for d in dogs})
+            names = {d.track_id: self.registry.names_by_tid[d.track_id] for d in dogs
+                     if d.track_id in self.registry.names_by_tid}
+        self.names = names
         st.assessments, st.dogs = found, len(dogs)
+        st.boxes, st.frame_w = [(d.track_id, d.box, names.get(d.track_id)) for d in dogs], w
+        self.history.record(now, found, names)
 
         # ---------- status text ----------
         if dogs:
@@ -142,14 +184,15 @@ class Pipeline:
             if top.level == 0:
                 calm = [a.reason for a in found if a.reason not in ("all calm", "resting")]
                 if len(found) == 1 and calm:
-                    st.status = f"{self.dog_name.capitalize()} is {calm[0]}"
+                    who = names.get(found[0].track_id) or self.dog_name
+                    st.status = f"{who[0].upper() + who[1:]} is {calm[0]}"
                 elif calm:
                     st.status = f"All calm - {len(found)} dogs ({', '.join(sorted(set(calm)))})"
                 else:
                     st.status = "All calm"
             else:
                 verb = "" if top.reason.startswith(("has been", "the ")) else "is "
-                who = "" if top.reason.startswith("the ") else f"{self.dog_name} "
+                who = "" if top.reason.startswith("the ") else f"{names.get(top.track_id) or self.dog_name} "
                 st.status = f"{LEVELS[top.level].upper()}: {who}{verb}{top.reason}"
             alert = self.engine.should_alert(found)
             if alert is not None:
@@ -166,7 +209,7 @@ class Pipeline:
         overlay.draw_zones(view, self.zones, self.editor)
         if self.show_hazards:
             overlay.draw_hazards(view, hz)
-        overlay.draw_dogs(view, dogs, {a.track_id: a for a in found})
+        overlay.draw_dogs(view, dogs, {a.track_id: a for a in found}, names)
 
         self._fps_n += 1
         tn = time.perf_counter()
@@ -186,10 +229,40 @@ class Pipeline:
                   for tid, r in list(self._actions.items())[:4]]
         return lines
 
+    # ------------------------------------------------------------------ Ask Bantay
+    def ask(self, question: str, speak: bool = True) -> str:
+        from .qa import answer
+        try:
+            text = answer(question, self)
+        except Exception as e:                     # pragma: no cover
+            text = "Sorry, I couldn't work that out."
+            self.log(f"[BantayAso] Q&A error: {e}")
+        self.log(f"[ASK] {question!r} -> {text}")
+        if speak and self.voice:
+            self.speaker.say(text, urgent=True)
+        return text
+
+    def ask_llm(self, question: str, facts: str) -> str | None:
+        """Phrase an open question with a small local LLM, using ONLY the given facts."""
+        try:
+            import requests
+            prompt = ("You are Bantay, a friendly home pet-camera assistant. Answer the owner's question "
+                      "in one or two short sentences using ONLY these facts. If the facts don't say, "
+                      f"say you didn't see that.\nFacts: {facts}\nQuestion: {question}\nAnswer:")
+            r = requests.post(self.ollama_url.rstrip("/") + "/api/generate", timeout=20,
+                              json={"model": self.qa_model, "prompt": prompt, "stream": False,
+                                    "keep_alive": "30m", "options": {"temperature": 0.2, "num_predict": 80}})
+            r.raise_for_status()
+            return (r.json().get("response") or "").strip().split("\n")[0] or None
+        except Exception as e:
+            self.log(f"[BantayAso] local LLM unavailable for Q&A ({e.__class__.__name__}); using the summary")
+            return None
+
     # ------------------------------------------------------------------
     def _fire(self, a, frame, dogs) -> None:
-        text = phrase(a.level, a.reason, self.dog_name)
-        ev_id = self.events.add(a, frame)
+        who = getattr(self, "names", {}).get(a.track_id)
+        text = phrase(a.level, a.reason, who or self.dog_name)
+        ev_id = self.events.add(a, frame, dog_label=who)
         ev = {"id": ev_id, "level": a.level, "text": text, "reason": a.reason, "vlm": None,
               "ts": time.time()}
         self.state.last_alert = ev

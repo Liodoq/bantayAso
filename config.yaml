@@ -118,6 +118,6 @@ alerts:
   do_not_disturb: false
   owner_voice_clip: ''
 detect:
-  dog_conf: 0.25
+  dog_conf: 0.18
   imgsz: 960
   hazard_conf: 0.25

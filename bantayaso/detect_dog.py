@@ -22,18 +22,46 @@ class Dog:
 
 
 class DogDetector:
-    def __init__(self, weights: Path, device: str = "cuda", conf: float = 0.35, imgsz: int = 640):
+    def __init__(self, weights: Path, device: str = "cuda", conf: float = 0.35, imgsz: int = 640,
+                 hold_seconds: float = 0.8, smooth: float = 0.5):
         from ultralytics import YOLO
         self.model = YOLO(str(weights))
         self.device = device
         self.conf = conf
         self.imgsz = imgsz
         self.half = device.startswith("cuda")
+        # anti-flicker: keep a dog that the detector missed for a moment (e.g. a white dog curled
+        # up on a white blanket hovers around the confidence threshold) and smooth box jitter
+        self.hold_seconds, self.smooth = hold_seconds, smooth
+        self._last: dict[int, tuple[Dog, float]] = {}
         # warm-up so the first real frame is not slow
         self.model.predict(np.zeros((imgsz, imgsz, 3), dtype=np.uint8), device=device,
                            half=self.half, verbose=False)
 
     def __call__(self, frame: np.ndarray) -> list[Dog]:
+        import time
+        now = time.monotonic()
+        raw = self._detect(frame)
+        out = []
+        for d in raw:
+            prev = self._last.get(d.track_id)
+            if prev is not None and d.track_id >= 0:
+                a = self.smooth
+                d = Dog(d.track_id, tuple(int(a * n + (1 - a) * o) for n, o in zip(d.box, prev[0].box)), d.conf)
+            out.append(d)
+            if d.track_id >= 0:
+                self._last[d.track_id] = (d, now)
+        seen = {d.track_id for d in out}
+        for tid, (d, t) in list(self._last.items()):
+            if tid in seen:
+                continue
+            if now - t <= self.hold_seconds:
+                out.append(d)                      # briefly missed: keep showing it
+            else:
+                self._last.pop(tid)
+        return out
+
+    def _detect(self, frame: np.ndarray) -> list[Dog]:
         res = self.model.track(frame, persist=True, classes=[DOG_CLASS], conf=self.conf,
                                imgsz=self.imgsz, device=self.device, half=self.half,
                                tracker=str(Path(__file__).parent / "trackers" / "dogs.yaml"), verbose=False)[0]

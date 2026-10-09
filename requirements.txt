@@ -9,3 +9,5 @@ requests
 pyttsx3>=2.90
 PySide6>=6.6
 winotify; platform_system == "Windows"
+openai-whisper            # Ask Bantay: local speech recognition
+sounddevice               # microphone

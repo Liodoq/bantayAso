@@ -85,6 +85,7 @@ class RiskEngine:
         self.vocab_tiers = {str(k): int(v) for k, v in (cfg.get("hazards") or {}).items()}
         self.tracks: dict[int, _Track] = {}
         self._last_alert = {2: float("-inf"), 3: float("-inf")}
+        self.handovers: list = []
 
     # ------------------------------------------------------------------
     def update(self, dogs, hazards, zones, frame_size, now: float | None = None,
@@ -97,6 +98,7 @@ class RiskEngine:
             if best is not None:
                 owner[i] = best.track_id
         out = []
+        self.handovers = []
         present = {d.track_id for d in dogs}
         for d in dogs:
             tid = d.track_id
@@ -115,6 +117,7 @@ class RiskEngine:
                     old_tid, old_tr = min(lost, key=dist)
                     if dist((old_tid, old_tr)) < 0.6 * bw:
                         self.tracks[tid] = self.tracks.pop(old_tid)
+                        self.handovers.append((old_tid, tid))
             tr = self.tracks.setdefault(tid, _Track(candidate_since=now, calm_since=now))
             tr.box = d.box
             tr.last_seen = now

@@ -6,10 +6,12 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer
+import threading
+
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFileDialog, QFormLayout,
-                               QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMainWindow, QMenu, QPushButton, QSizePolicy,
                                QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
 
@@ -31,6 +33,10 @@ def lbl(text="", name=None, wrap=False):
 
 
 class MainWindow(QMainWindow):
+    heard = Signal(str, bool)          # transcribed question (from the mic thread)
+    answered = Signal(str, str)        # question, answer (from the worker thread)
+    mic_state = Signal(str)
+
     def __init__(self, args):
         super().__init__()
         self.setWindowTitle("BantayAso")
@@ -62,6 +68,9 @@ class MainWindow(QMainWindow):
         self.worker.event.connect(self.on_event)
         self.worker.ready.connect(self.on_ready)
         QShortcut(QKeySequence("F12"), self, activated=self.toggle_debug)
+        self.heard.connect(self.on_heard)
+        self.answered.connect(self.on_answered)
+        self.mic_state.connect(self.on_mic_state)
         self.snooze_timer = QTimer(self, singleShot=True, timeout=self.end_snooze)
         self.worker.start()
 
@@ -110,6 +119,9 @@ class MainWindow(QMainWindow):
         top.addStretch()
         self.btn_voice = QPushButton("🔊 Voice on", objectName="pill", checkable=True, checked=True)
         self.btn_dnd = QPushButton("🌙 Do not disturb", objectName="pill", checkable=True)
+        self.btn_ask = QPushButton("🎙 Ask Bantay", objectName="pill")
+        self.btn_ask.clicked.connect(self.ask_voice)
+        top.addWidget(self.btn_ask)
         self.btn_rec = QPushButton("● Record", objectName="pill", checkable=True)
         btn_tray = QPushButton("⤓ Minimize to tray", objectName="pill")
         for b in (self.btn_voice, self.btn_dnd, self.btn_rec, btn_tray):
@@ -127,6 +139,8 @@ class MainWindow(QMainWindow):
         vc = QVBoxLayout(vid_card)
         vc.setContentsMargins(14, 14, 14, 10)
         self.video = VideoView("Loading the local AI models...")
+        self.video.clicked.connect(self.video_click)
+        self.video.setToolTip("Click a dog to name it or correct what it's doing")
         vc.addWidget(self.video, 1)
         self.meter = RiskMeter()
         vc.addWidget(self.meter)
@@ -157,6 +171,19 @@ class MainWindow(QMainWindow):
             sc.addWidget(w)
         sc.addLayout(btns)
         right.addWidget(self.status_card)
+
+        ask_card = card()
+        ask_card.setFixedWidth(320)
+        ac = QVBoxLayout(ask_card)
+        ac.setContentsMargins(14, 12, 14, 12)
+        ac.addWidget(lbl("ASK BANTAY", "h3"))
+        self.ask_box = QLineEdit()
+        self.ask_box.setPlaceholderText("What were my dogs doing for the past 2 minutes?")
+        self.ask_box.returnPressed.connect(lambda: self.ask_text(self.ask_box.text()))
+        ac.addWidget(self.ask_box)
+        self.ask_answer = lbl("Type a question, click 🎙 Ask Bantay, or turn on hands-free in Settings and say \"Bantay, …\"", "muted", wrap=True)
+        ac.addWidget(self.ask_answer)
+        right.addWidget(ask_card)
 
         rec_card = card()
         rec_card.setFixedWidth(320)
@@ -322,6 +349,24 @@ class MainWindow(QMainWindow):
         f.addRow(lbl("Notifications", "muted"), self.set_toast_cb)
         f.addRow(lbl("Video", "muted"), self.set_hz_cb)
         f.addRow(lbl("Owner voice", "muted"), clip_row)
+        self.set_hf_cb = QCheckBox("Hands-free: answer when I say \"Bantay, …\"")
+        self.set_hf_cb.setChecked(cfg.get("qa", {}).get("hands_free", False))
+        f.addRow(lbl("Ask Bantay", "muted"), self.set_hf_cb)
+        dogs_row = QVBoxLayout()
+        self.dog_list = QListWidget()
+        self.dog_list.setFixedHeight(90)
+        dogs_row.addWidget(self.dog_list)
+        drow = QHBoxLayout()
+        rm = QPushButton("Forget selected dog")
+        rm.clicked.connect(self.forget_dog)
+        rex = QPushButton("Reset taught actions")
+        rex.clicked.connect(self.reset_examples)
+        drow.addWidget(rex)
+        drow.addWidget(lbl("Click a dog on the Monitor video to name it or correct what it's doing.", "faint"))
+        drow.addStretch()
+        drow.addWidget(rm)
+        dogs_row.addLayout(drow)
+        f.addRow(lbl("My dogs", "muted"), dogs_row)
         save = QPushButton("Save settings", objectName="primary")
         save.clicked.connect(self.save_settings)
         f.addRow("", save)
@@ -350,6 +395,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ live updates
     def on_ready(self):
         self.subtitle.setText(f"Live since {time.strftime('%I:%M %p').lstrip('0')}")
+        lst = self.worker.pipe.listener
+        if lst:
+            lst.on_text = lambda text, woke: self.heard.emit(text, woke)
+            lst.on_state = lambda s: self.mic_state.emit(s)
+            self.apply_hands_free(self.set_hf_cb.isChecked())
+        else:
+            self.btn_ask.setEnabled(False)
+        self.refresh_dogs()
         self.set_voice(self.btn_voice.isChecked())
         self.refresh_recent()
 
@@ -478,6 +531,90 @@ class MainWindow(QMainWindow):
             self.tray.hide()
         e.accept()
         QApplication.quit()
+
+    # ------------------------------------------------------------------ Ask Bantay
+    def ask_voice(self):
+        lst = self.worker.pipe.listener if self.worker.pipe else None
+        if lst and lst.push_to_talk():
+            self.ask_answer.setText("Listening... ask your question.")
+
+    def on_mic_state(self, s: str):
+        self.btn_ask.setText({"listening": "🎙 Listening...", "thinking": "🎙 Thinking..."}.get(s, "🎙 Ask Bantay"))
+
+    def on_heard(self, text: str, _woke: bool):
+        if not text:
+            self.ask_answer.setText("I didn't catch that. Try again a bit closer to the mic.")
+            return
+        self.ask_text(text)
+
+    def ask_text(self, q: str):
+        q = q.strip()
+        pipe = self.worker.pipe
+        if not q or not pipe:
+            return
+        self.ask_box.clear()
+        self.ask_answer.setText(f"<span style='color:{T.MUTED}'>You: {q}</span><br>Thinking...")
+        threading.Thread(target=lambda: self.answered.emit(q, pipe.ask(q)), daemon=True).start()
+
+    def on_answered(self, q: str, a: str):
+        self.ask_answer.setText(f"<span style='color:{T.MUTED}'>You: {q}</span><br>"
+                                f"<b style='color:{T.CARAMEL}'>Bantay:</b> {a}")
+
+    def apply_hands_free(self, on: bool):
+        lst = self.worker.pipe.listener if self.worker.pipe else None
+        if lst:
+            lst.set_hands_free(on)
+
+    # ------------------------------------------------------------------ dog names
+    def video_click(self, x: int, y: int, button: int):
+        """Click a dog: name it, or teach Bantay what it is doing (fixes wrong labels)."""
+        pipe = self.worker.pipe
+        if not pipe:
+            return
+        hit = [(tid, box, name) for tid, box, name in pipe.state.boxes
+               if box[0] <= x <= box[2] and box[1] <= y <= box[3]]
+        if not hit:
+            return
+        tid, box, name = min(hit, key=lambda t: (t[1][2] - t[1][0]) * (t[1][3] - t[1][1]))
+        menu = QMenu(self)
+        if pipe.registry:
+            menu.addAction(f"Name this dog{f' ({name})' if name else ''}...").setData(("name", None))
+        if pipe.classifier:
+            sub = menu.addMenu("This dog is actually...")
+            for lab in pipe.classifier.labels:
+                sub.addAction(lab).setData(("teach", lab))
+        from PySide6.QtGui import QCursor
+        act = menu.exec(QCursor.pos())
+        if not act or not act.data():
+            return
+        kind, lab = act.data()
+        if kind == "name":
+            new, ok = QInputDialog.getText(self, "Name this dog", "What's this dog's name?", text=name or "")
+            if ok and new.strip():
+                pipe.registry.start_enroll(tid, new.strip())
+                self.ask_answer.setText(f"Learning what {new.strip()} looks like... keep them in view for a few seconds.")
+                QTimer.singleShot(4000, self.refresh_dogs)
+        else:
+            pipe.classifier.teach(tid, lab)
+            self.ask_answer.setText(f"Thanks! Learning what \"{lab}\" looks like for your dog. "
+                                    "Keep it in view for a couple of seconds.")
+
+    def refresh_dogs(self):
+        self.dog_list.clear()
+        reg = self.worker.pipe.registry if self.worker.pipe else None
+        for n, arr in sorted((reg.dogs if reg else {}).items()):
+            self.dog_list.addItem(f"{n}   ·   {len(arr)} samples")
+
+    def reset_examples(self):
+        if self.worker.pipe and self.worker.pipe.classifier:
+            self.worker.pipe.classifier.forget_examples()
+
+    def forget_dog(self):
+        it = self.dog_list.currentItem()
+        reg = self.worker.pipe.registry if self.worker.pipe else None
+        if it and reg:
+            reg.delete(it.text().split("   ·")[0])
+            self.refresh_dogs()
 
     # ------------------------------------------------------------------ events page
     def _events(self):
@@ -622,7 +759,9 @@ class MainWindow(QMainWindow):
         al["speak_vlm"] = self.set_vlm_cb.isChecked()
         al["toast"] = self.set_toast_cb.isChecked()
         al["owner_voice_clip"] = self.set_clip.text().strip()
+        cfg.setdefault("qa", {})["hands_free"] = self.set_hf_cb.isChecked()
         config.save(cfg)
+        self.apply_hands_free(self.set_hf_cb.isChecked())
         pipe = self.worker.pipe
         if pipe:
             pipe.dog_name = cfg["dog_name"] or "your dog"

@@ -85,11 +85,23 @@ def main() -> None:
     except Exception as e:
         print(f"  CLIP FAILED ({e})")
 
-    print("[4/4] Ollama VLM")
-    if shutil.which("ollama"):
-        subprocess.run(["ollama", "pull", m["vlm"]], check=False)
+    print("[4/5] Ollama models (vision + Ask Bantay text model)")
+    qa_model = cfg.get("qa", {}).get("model", "qwen2.5:1.5b")
+    exe = shutil.which("ollama") or os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe")
+    if exe and os.path.exists(exe):
+        for name in (m["vlm"], qa_model):
+            subprocess.run([exe, "pull", name], check=False)
     else:
-        print("  ollama not on PATH -> install from ollama.com, then: ollama pull " + m["vlm"])
+        print(f"  ollama not found -> install from ollama.com, then: ollama pull {m['vlm']} ; ollama pull {qa_model}")
+
+    print("[5/5] Whisper speech recognition (Ask Bantay)")
+    try:
+        import whisper
+        whisper.load_model(cfg.get("qa", {}).get("whisper_model", "base"), device="cpu",
+                           download_root=str(config.MODELS_DIR / "whisper"))
+        print("  whisper model cached in models/whisper")
+    except Exception as e:
+        print(f"  Whisper FAILED ({e}) -> pip install openai-whisper sounddevice")
 
     print("Done. Next: python scripts/check_env.py")
 

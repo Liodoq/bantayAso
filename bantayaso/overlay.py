@@ -43,19 +43,20 @@ LEVEL_KEY = ["caramel", "watch", "warning", "danger"]
 ZONE_KEY = {"trash": "warning", "danger": "danger", "nogo": "watch", "bed": "safe"}
 
 
-def draw_dogs(img, dogs, levels: dict | None = None):
+def draw_dogs(img, dogs, levels: dict | None = None, names: dict | None = None):
     """levels: track_id -> Assessment (optional) to color each dog by its risk."""
     for d in dogs:
         a = (levels or {}).get(d.track_id)
         color = C[LEVEL_KEY[a.level]] if a else C["caramel"]
         x1, y1, x2, y2 = d.box
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 3 if a and a.level >= 2 else 2)
+        who = (names or {}).get(d.track_id) or "dog"
         if a is None:
-            tag = f"dog {d.conf:.2f}"
+            tag = f"{who} {d.conf:.2f}"
         elif a.level == 0:
-            tag = f"dog - {a.reason}" if a.reason not in ("all calm", "resting") else "dog - calm"
+            tag = f"{who} - {a.reason}" if a.reason not in ("all calm", "resting") else f"{who} - calm"
         else:
-            tag = f"dog - {a.reason}"
+            tag = f"{who} - {a.reason}"
         label(img, tag, x1, y1, color)
 
 

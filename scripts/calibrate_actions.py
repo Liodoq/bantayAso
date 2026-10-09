@@ -55,9 +55,11 @@ def main():
                 if r is None:
                     continue
                 e = clf._ema[d.track_id]
-                top3 = [(clf.labels[j], float(e[j])) for j in np.argsort(-e)[:3]]
                 m_lvl, m_e = mot.get(d.track_id, ("?", 0.0))
-                labels[d.track_id][r.label] += 1
+                top3 = [(clf.labels[j], float(e[j])) for j in np.argsort(-e)[:3]]
+                from bantayaso.actions import MOTION_LABELS
+                shown = r.pose if (r.label in MOTION_LABELS and m_lvl == "still" and r.pose) else r.label
+                labels[d.track_id][shown] += 1
                 mouths[d.track_id].append(r.mouth)
                 chews[d.track_id].append(r.chew)
                 rows.append([f"{t:.1f}", d.track_id, *[f"{l}:{p:.2f}" for l, p in top3],
@@ -74,7 +76,7 @@ def main():
     print(f"clip: {clip.name}")
     for tid in labels:
         m = np.array(mouths[tid])
-        print(f"dog#{tid}: actions {dict(labels[tid].most_common(4))} | mouth mean {m.mean():.2f} "
+        print(f"dog#{tid}: shown labels {dict(labels[tid].most_common(4))} | mouth mean {m.mean():.2f} "
               f"max {m.max():.2f} | chew mean {np.mean(chews[tid]):.2f} max {np.max(chews[tid]):.2f}")
     print(f"log: {out}")
 

@@ -36,7 +36,8 @@ def main() -> None:
         report(BAD, "torch not installed")
 
     for mod, label in [("cv2", "opencv"), ("ultralytics", "ultralytics"), ("open_clip", "open_clip"),
-                       ("yaml", "pyyaml"), ("pyttsx3", "pyttsx3"), ("PySide6", "PySide6"), ("requests", "requests")]:
+                       ("yaml", "pyyaml"), ("pyttsx3", "pyttsx3"), ("PySide6", "PySide6"), ("requests", "requests"),
+                       ("whisper", "openai-whisper"), ("sounddevice", "sounddevice")]:
         try:
             m = __import__(mod)
             report(OK, f"{label} {getattr(m, '__version__', '')}")
@@ -52,6 +53,9 @@ def main() -> None:
         r = requests.get(cfg["models"]["ollama_url"] + "/api/tags", timeout=3)
         names = [m["name"] for m in r.json().get("models", [])]
         report(OK, f"Ollama running, models: {', '.join(names) or '(none)'}")
+        qa_m = cfg.get("qa", {}).get("model", "qwen2.5:1.5b")
+        if not any(n.split(":")[0] == qa_m.split(":")[0] and (":" not in qa_m or n == qa_m) for n in names):
+            report(WARN, f"Ask Bantay model '{qa_m}' not pulled -> run: ollama pull {qa_m} (optional)")
         want = cfg["models"]["vlm"]
         if not any(n.split(":")[0] == want.split(":")[0] for n in names):
             report(WARN, f"VLM '{want}' not pulled yet -> run: ollama pull {want}")

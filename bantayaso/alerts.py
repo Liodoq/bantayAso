@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from pathlib import Path
 
 
@@ -16,6 +17,7 @@ class Speaker:
         self.q: "queue.Queue[str]" = queue.Queue(maxsize=3)
         self.rate = rate
         self.enabled = True
+        self.speaking = False
         threading.Thread(target=self._run, name="Speaker", daemon=True).start()
 
     def say(self, text: str, urgent: bool = False) -> None:
@@ -33,6 +35,17 @@ class Speaker:
             pass
 
     def _run(self) -> None:
+        # Windows speech (SAPI) runs over COM; a background thread must initialize COM itself,
+        # otherwise pyttsx3 can fail silently and nothing is heard.
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            try:
+                import comtypes
+                comtypes.CoInitialize()
+            except Exception:
+                pass
         try:
             import pyttsx3
         except Exception as e:                        # pragma: no cover
@@ -40,6 +53,7 @@ class Speaker:
             return
         while True:
             text = self.q.get()
+            self.speaking = True
             try:
                 engine = pyttsx3.init()               # fresh engine per message: avoids SAPI hangs
                 engine.setProperty("rate", self.rate)
@@ -47,7 +61,10 @@ class Speaker:
                 engine.runAndWait()
                 engine.stop()
             except Exception as e:                    # pragma: no cover
-                print(f"[BantayAso] voice error: {e}")
+                print(f"[BantayAso] voice error: {e!r}")
+            finally:
+                time.sleep(0.3)                       # let the room go quiet before listening again
+                self.speaking = self.q.qsize() > 0
 
 
 def toast(title: str, message: str, icon: Path | None = None) -> None:
