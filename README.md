@@ -4,12 +4,15 @@ A desktop app that watches your dog through a USB camera and **warns you out lou
 
 Built for the AppBuildersPH Hackathon 2026 (Local AI). Work in progress — setup: see [SETUP.md](SETUP.md). Full disclosures will be added before submission.
 
-## Run (current build)
+## Run
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python -m bantayaso                         # live from the action camera
+python -m bantayaso                         # desktop app (Monitor / Events / Zones / Settings, tray)
 python -m bantayaso --source data\clips\rec_YYYYMMDD_HHMMSS.mp4   # test on a recorded clip
+python -m bantayaso --cv                    # simple OpenCV developer window
 ```
-Keys (debug view **D** also shows each dog's action, mouth score and motion): **R** record clip · **C** save last 10 s · **S** snapshot · **Z** draw zones · **H** hazard boxes · **D** debug info · **Q** quit
+Desktop app: **F12** shows technical info on the video. Closing the window keeps it running in the tray (right-click the paw icon → Quit).
 
-Tests (no camera/GPU): `python scripts\test_risk.py`
+OpenCV window keys: **R** record · **C** save last 10 s · **S** snapshot · **Z** zones · **H** object boxes · **M** mute · **N** do not disturb · **D** debug · **Q** quit
+
+Tests (no camera/GPU): `python scripts\test_risk.py` · Measure a clip: `python scripts\calibrate_actions.py <clip.mp4>`
