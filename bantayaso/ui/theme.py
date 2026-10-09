@@ -55,6 +55,25 @@ def _check(color: str) -> str:
                 f'stroke-linecap="round" stroke-linejoin="round"/></svg>')
 
 
+ICONS = {   # 24x24 stroke icons (lucide-style), drawn in the theme colour
+    "undo": '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-4"/>',
+    "check": '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    "backspace": '<path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="M17.5 9.5l-5 5"/>'
+                 '<path d="M12.5 9.5l5 5"/>',
+    "trash": '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/>'
+             '<path d="M14 11v5"/>',
+    "save": '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/>'
+            '<path d="M7 3v5h8"/>',
+}
+
+
+def icon_path(name: str, color: str) -> str:
+    return _svg(f"i_{name}_{color.strip('#')}",
+                f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" '
+                f'stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                f'{ICONS[name]}</svg>')
+
+
 def build_qss() -> str:
     g = globals()
     chev = _arrow(g["CARAMEL"])
@@ -86,6 +105,12 @@ QPushButton:disabled {{ color: {g['FAINT']}; border-color: {g['LINE']}; }}
 QPushButton#primary {{ background: {g['CARAMEL']}; color: {g['ON_ACCENT']}; border-color: {g['CARAMEL']}; font-weight: 600; }}
 QPushButton#primary:hover {{ background: {g['BROWN']}; border-color: {g['BROWN']}; color: #FFFFFF; }}
 QPushButton#primary:pressed {{ background: {g['BROWN']}; padding-top: 10px; padding-bottom: 6px; }}
+QPushButton#icon, QPushButton#iconPrimary {{ padding: 0; min-width: 38px; max-width: 38px; min-height: 38px;
+                                             max-height: 38px; border-radius: 10px; }}
+QPushButton#iconPrimary {{ background: {g['CARAMEL']}; border-color: {g['CARAMEL']}; }}
+QPushButton#iconPrimary:hover {{ background: {g['BROWN']}; border-color: {g['BROWN']}; }}
+QPushButton#icon:pressed, QPushButton#iconPrimary:pressed {{ padding-top: 2px; }}
+QFrame#toolbar {{ background: {g['PANEL']}; border: 1px solid {g['LINE']}; border-radius: 14px; }}
 QPushButton#pill {{ border-radius: 15px; padding: 5px 14px; min-height: 18px; color: {g['MUTED']}; background: {g['PANEL']}; }}
 QPushButton#pill[menu="true"] {{ padding-right: 30px; }}
 QPushButton::menu-indicator {{ image: url("{chev_m}"); width: 10px; height: 7px; subcontrol-origin: padding;

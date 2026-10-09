@@ -270,15 +270,15 @@ def answer(question: str, pipe) -> str:
     known = sorted((pipe.registry.dogs if pipe.registry else {}).keys(), key=len, reverse=True)
     st = pipe.state
     default = pipe.dog_name
-    if not q:
-        return "Yes? Ask me what your dogs are doing, where they are, or if anything happened."
+    if not re.sub(r"[\W_]+", "", q):                    # just "Bantay" / "Bantay?" -> short reply, then listen
+        return "Yes?"
     # small talk the assistant should handle itself
     if re.search(r"can you hear me|are you (there|listening|awake)|naririnig mo", ql):
-        return "Yes, I can hear you! Ask me what your dogs are doing, where they are, or what happened today."
+        return "Yes, I can hear you."
     if re.fullmatch(r"(hi|hello|hey|good (morning|afternoon|evening)|kumusta)[\s!.]*", ql):
-        return "Hi! I'm watching your dogs. Ask me what they're doing or if anything happened."
+        return "Hi! I'm watching them."
     if re.search(r"\b(thank you|thanks|salamat)\b", ql):
-        return "You're welcome! I'll keep watching them."
+        return "You're welcome."
     if re.search(r"who are you|what can you do|^help\b|how do i use you", ql):
         return ("I'm Bantay, your offline dog watcher. I can tell you what your dogs did in the last 1 to 10 "
                 "minutes, where they are, how many I see, and what alerts happened today.")

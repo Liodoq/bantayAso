@@ -16,7 +16,7 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPropertyAnimation, Q
                             QTimer, Signal)
 from PySide6.QtGui import QAction, QColor, QCursor, QIcon, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog,
-                               QFormLayout, QGraphicsColorizeEffect, QGraphicsOpacityEffect,
+                               QFormLayout, QFrame, QGraphicsColorizeEffect, QGraphicsOpacityEffect,
                                QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListView, QListWidget,
                                QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton,
                                QScrollArea, QSizePolicy, QSlider, QStackedWidget, QSystemTrayIcon,
@@ -457,41 +457,70 @@ class MainWindow(QMainWindow):
         return page
 
     def _zones_page(self):
-        page, v = self._page("Zones", "Mark areas and furniture: pick a type, type a name (Sofa, Charger corner, "
-                                      "Food bowl…), click points around it on the camera view, then Finish zone. "
-                                      "Food bowl / Play area make eating or chewing toys there count as normal.")
-        bar = QHBoxLayout()
+        page, v = self._page("Zones", "Mark areas of the room so Bantay knows what is safe and what is not. "
+                                      "Food bowl and Play area make eating or chewing toys there normal.")
+        # ---- step 1: what kind of area
+        tb = QFrame(objectName="toolbar")
+        tl = QHBoxLayout(tb)
+        tl.setContentsMargins(14, 10, 10, 10)
+        tl.setSpacing(8)
+        tl.addWidget(lbl("AREA", "h3"))
         self.zone_type = QButtonGroup(self)
         for i, t in enumerate(ZONE_TYPES):
             b = QPushButton(ZONE_LABELS[t], objectName="pill", checkable=True)
             self.zone_type.addButton(b, i)
-            bar.addWidget(b)
+            tl.addWidget(b)
         self.zone_type.button(0).setChecked(True)
         self.zone_type.idClicked.connect(self.set_zone_type)
+        tl.addSpacing(6)
         self.zone_name = QLineEdit()
-        self.zone_name.setPlaceholderText("Name (optional): Sofa, Charger corner...")
-        self.zone_name.setFixedWidth(240)
-        bar.addWidget(self.zone_name)
-        bar.addStretch()
-        for text, fn in (("Undo point", self.zone_undo), ("Finish zone", self.zone_finish),
-                         ("Delete last zone", self.zone_delete)):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            bar.addWidget(b)
-        save = QPushButton("Save zones", objectName="primary")
-        save.clicked.connect(self.zone_save)
-        bar.addWidget(save)
-        v.addLayout(bar)
+        self.zone_name.setPlaceholderText("Name (optional), e.g. Sofa")
+        self.zone_name.setMinimumWidth(170)
+        self.zone_name.returnPressed.connect(self.zone_finish)
+        tl.addWidget(self.zone_name, 1)
+        v.addWidget(tb)
+
+        # ---- step 2: draw on the video; actions as icons (hover shows what each does)
         c = card()
         cv = QVBoxLayout(c)
-        cv.setContentsMargins(14, 14, 14, 14)
+        cv.setContentsMargins(14, 12, 14, 14)
+        cv.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.zone_step = lbl("", wrap=True)
+        self.zone_step.setStyleSheet("font-weight: 600;")
+        head.addWidget(self.zone_step, 1)
+        self.zone_icons = []
+        for key, tip, fn, primary in (("undo", "Undo last point  (Backspace)", self.zone_undo, False),
+                                      ("check", "Finish zone: close the shape you drew  (Enter)", self.zone_finish, False),
+                                      ("backspace", "Delete the last zone", self.zone_delete, False),
+                                      ("trash", "Clear all zones", self.zone_clear, False),
+                                      ("save", "Save zones", self.zone_save, True)):
+            b = QPushButton(objectName="iconPrimary" if primary else "icon")
+            b.setToolTip(tip)
+            b.setIconSize(QSize(18, 18))
+            b.clicked.connect(fn)
+            if primary:
+                head.addSpacing(6)
+            head.addWidget(b)
+            self.zone_icons.append((b, key, primary))
+        cv.addLayout(head)
         self.zone_video = VideoView("Waiting for the camera...")
         self.zone_video.clicked.connect(self.zone_click)
-        cv.addWidget(self.zone_video)
-        v.addWidget(c, 1)
+        cv.addWidget(self.zone_video, 1)
         self.zone_info = lbl("", "muted")
-        v.addWidget(self.zone_info)
+        cv.addWidget(self.zone_info)
+        v.addWidget(c, 1)
+        for key, fn in ((Qt.Key_Return, self.zone_finish), (Qt.Key_Enter, self.zone_finish),
+                        (Qt.Key_Backspace, self.zone_undo)):
+            QShortcut(QKeySequence(key), page, activated=fn, context=Qt.WidgetWithChildrenShortcut)
+        self.zone_step.setText("Pick an area type, then click its corners on the video.")
+        self._zone_icons_refresh()
         return page
+
+    def _zone_icons_refresh(self):
+        for b, key, primary in getattr(self, "zone_icons", []):
+            b.setIcon(QIcon(T.icon_path(key, T.ON_ACCENT if primary else T.CREAM)))
 
     def _things_page(self):
         page, v = self._page("Things to watch", "Objects Bantay looks for near your dogs, and how dangerous each one "
@@ -771,6 +800,7 @@ class MainWindow(QMainWindow):
         self.set_theme.blockSignals(False)
         self._set_status_card(self.meter.level, self.status_title.text(), self.status_sub.text(), None)
         self.refresh_things()
+        self._zone_icons_refresh()
         for w in (self.video, self.zone_video, self.meter, self.chart):
             w.update()
         self.refresh_recent()
@@ -1209,6 +1239,7 @@ class MainWindow(QMainWindow):
     def set_zone_type(self, i: int):
         if self.worker.pipe:
             self.worker.pipe.editor.type = ZONE_TYPES[i]
+            self.update_zone_info()
 
     def zone_click(self, x: int, y: int, button: int):
         pipe = self.worker.pipe
@@ -1218,7 +1249,11 @@ class MainWindow(QMainWindow):
             self.zone_finish()
             return
         w, h = self.frame_size
-        pipe.editor.current.append([x / w, y / h])
+        cur = pipe.editor.current
+        if len(cur) >= 3 and abs(x - cur[0][0] * w) < w * 0.025 and abs(y - cur[0][1] * h) < h * 0.04:
+            self.zone_finish()                         # clicked the first point again: close the shape
+            return
+        cur.append([x / w, y / h])
         self.update_zone_info()
 
     def zone_undo(self):
@@ -1240,6 +1275,17 @@ class MainWindow(QMainWindow):
             self.worker.pipe.zones.pop()
             self.update_zone_info()
 
+    def zone_clear(self):
+        pipe = self.worker.pipe
+        if not pipe or not (pipe.zones or pipe.editor.current):
+            return
+        if QMessageBox.question(self, "Clear all zones", "Remove every zone? (Press Save afterwards to keep it "
+                                "that way.)") != QMessageBox.Yes:
+            return
+        pipe.zones.clear()
+        pipe.editor.current = []
+        self.update_zone_info("All zones cleared - press Save to keep it.")
+
     def zone_save(self):
         if self.worker.pipe:
             if self.worker.pipe.editor.current:
@@ -1252,7 +1298,16 @@ class MainWindow(QMainWindow):
         if not pipe:
             return
         names = ", ".join(z.name for z in pipe.zones) or "none yet"
-        self.zone_info.setText(f"Zones: {names}   ·   points in the current zone: {len(pipe.editor.current)}   {extra}")
+        n = len(pipe.editor.current)
+        kind = ZONE_LABELS.get(pipe.editor.type, pipe.editor.type)
+        if n == 0:
+            step = f"Click the corners of the {kind.lower()} area on the video."
+        elif n < 3:
+            step = f"{n} point{'s' if n > 1 else ''} - keep clicking around the area (at least 3)."
+        else:
+            step = f"{n} points - click the first point again or press \u2713 to finish the zone."
+        self.zone_step.setText(step)
+        self.zone_info.setText(f"Zones: {names}" + (f"   ·   {extra}" if extra else ""))
 
     # ================================================================== things
     def _thing_filter(self, key):

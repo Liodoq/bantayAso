@@ -56,57 +56,7 @@ actions:
 - scratching furniture
 - jumping on furniture
 - licking itself
-zones:
-- name: bed 1
-  type: bed
-  points:
-  - - 0.2922
-    - 0.5569
-  - - 0.393
-    - 0.5917
-  - - 0.2086
-    - 0.8125
-  - - 0.8164
-    - 0.8486
-  - - 0.9609
-    - 0.6903
-  - - 0.8609
-    - 0.5611
-  - - 0.7141
-    - 0.5639
-  - - 0.5453
-    - 0.5736
-  - - 0.3203
-    - 0.5472
-- name: bed 2
-  type: bed
-  points:
-  - - 0.2109
-    - 0.8167
-  - - 0.1461
-    - 0.8819
-  - - 0.875
-    - 0.9292
-  - - 0.9922
-    - 0.7417
-  - - 0.9313
-    - 0.5847
-  - - 0.868
-    - 0.5472
-  - - 0.7578
-    - 0.55
-  - - 0.3461
-    - 0.5319
-  - - 0.2852
-    - 0.5653
-  - - 0.25
-    - 0.6667
-  - - 0.2047
-    - 0.7347
-  - - 0.157
-    - 0.8181
-  - - 0.1234
-    - 0.8806
+zones: []
 risk:
   persist_seconds: 1.0
   cooldown_warning: 20
@@ -119,12 +69,13 @@ alerts:
   owner_voice_clip: ''
   speak_vlm: true
   toast: true
+  voice_name: Microsoft Zira Desktop - English (United States)
+  voice_rate: 1
 detect:
   dog_conf: 0.18
   imgsz: 960
   hazard_conf: 0.25
-dog_name: Oreo
 qa:
-  hands_free: true
+  hands_free: false
 ui:
   theme: light
