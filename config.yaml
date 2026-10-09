@@ -89,7 +89,7 @@ detect:
   imgsz: 960
   hazard_conf: 0.25
 qa:
-  whisper_model: small.en      # clearer than base.en (one-time ~460 MB download); set base.en if slow
+  whisper_model: small.en
   hands_free: false
 ui:
   theme: light
