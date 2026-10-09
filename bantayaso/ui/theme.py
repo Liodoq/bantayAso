@@ -48,6 +48,13 @@ def _arrow(color: str) -> str:
                 f'stroke-linecap="round" stroke-linejoin="round"/></svg>')
 
 
+def _up(color: str) -> str:
+    return _svg(f"up_{color.strip('#')}",
+                f'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6">'
+                f'<path d="M1 5l4-4 4 4" fill="none" stroke="{color}" stroke-width="1.6" '
+                f'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+
+
 def _check(color: str) -> str:
     return _svg(f"check_{color.strip('#')}",
                 f'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="10" viewBox="0 0 12 10">'
@@ -126,6 +133,13 @@ QListWidget::item:selected {{ background: {g['RAISED']}; border: 1px solid {g['C
 QLineEdit, QSpinBox, QComboBox {{ background: {g['INSET']}; border: 1px solid {g['LINE']}; border-radius: 9px;
                                    padding: 7px 12px; min-height: 22px; }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {g['CARAMEL']}; }}
+QSpinBox {{ padding-right: 26px; }}
+QSpinBox::up-button, QSpinBox::down-button {{ subcontrol-origin: border; width: 22px; border: none; background: transparent; }}
+QSpinBox::up-button {{ subcontrol-position: top right; margin-top: 4px; margin-right: 4px; }}
+QSpinBox::down-button {{ subcontrol-position: bottom right; margin-bottom: 4px; margin-right: 4px; }}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background: {g['RAISED']}; border-radius: 5px; }}
+QSpinBox::up-arrow {{ image: url("{_up(g['CARAMEL'])}"); width: 10px; height: 6px; }}
+QSpinBox::down-arrow {{ image: url("{chev}"); width: 10px; height: 6px; }}
 QComboBox {{ padding: 7px 34px 7px 12px; min-height: 22px; combobox-popup: 0; }}
 QComboBoxPrivateContainer {{ background: transparent; border: none; padding: 0; margin: 0; }}
 QComboBox:hover {{ border-color: {g['CARAMEL']}; }}

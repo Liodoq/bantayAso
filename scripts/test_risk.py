@@ -120,6 +120,26 @@ for i in range(70, 400):
     if al: fired.append(al.reason)
 check("after chewing stops, no 'resting' warning is sent", not any("resting" in f or "calm" in f for f in fired), str(fired[:3]))
 
+# a held Danger must not re-alert as "licking itself"
+e = RiskEngine(CFG); calm2 = A("licking itself", .6, .1, .1)
+for i in range(200):
+    e.update([dog], [], [], SIZE, now=i * 0.1, actions={1: A("eating", .3, .45, .44)})
+fired = []
+for i in range(200, 500):
+    a = e.update([dog], [], [], SIZE, now=i * 0.1, actions={1: calm2})[0]
+    al = e.should_alert([a], now=i * 0.1 + 2000)
+    if al: fired.append(al.reason)
+check("after a chewing Danger, no 'licking itself' danger alert", not any("licking" in f for f in fired), str(fired[:3]))
+
+# owner-edited behaviours (Behaviours page)
+import copy
+cfg2 = copy.deepcopy(CFG); cfg2["behaviors"] = {"licking itself": {"level": 2}, "digging": {"level": 0}}
+e = RiskEngine(cfg2); a, _ = run(e, 30, [], [], act=A("licking itself", .6, .1, .1))
+check("owner sets 'licking itself' to Warning -> warning", a.level == 2 and "licking" in a.reason, a.reason)
+check("...and it may alert", e.should_alert([a], now=100) is not None)
+e = RiskEngine(cfg2); a, _ = run(e, 30, [], [], act=A("digging", .6, .1, .1, "frantic"))
+check("owner sets 'digging' to Safe -> no warning", a.level == 0, a.reason)
+
 # rough play / fighting
 def run_pair(frames, score):
     e = RiskEngine(CFG); a = None

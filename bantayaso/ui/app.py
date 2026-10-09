@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
                                QFormLayout, QFrame, QGraphicsColorizeEffect, QGraphicsOpacityEffect,
                                QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListView, QListWidget,
                                QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton,
-                               QScrollArea, QSizePolicy, QSlider, QStackedWidget, QSystemTrayIcon,
+                               QScrollArea, QSizePolicy, QSlider, QSpinBox, QStackedWidget, QSystemTrayIcon,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from .. import config
@@ -30,8 +30,9 @@ from .worker import Worker
 
 TIERS = [(3, "High danger"), (2, "Medium"), (1, "Low"), (0, "Ignore (look-alike)")]
 TIER_NAME = dict(TIERS)
-PAGES = ["Monitor", "Events", "Dogs", "Zones", "Things", "Settings"]
-P_MONITOR, P_EVENTS, P_DOGS, P_ZONES, P_THINGS, P_SETTINGS = range(6)
+PAGES = ["Monitor", "Events", "Dogs", "Zones", "Things", "Behaviours", "Settings"]
+P_MONITOR, P_EVENTS, P_DOGS, P_ZONES, P_THINGS, P_BEHAVIOURS, P_SETTINGS = range(7)
+LEVEL_CHOICES = ["Safe", "Watch", "Warning", "Danger"]
 
 
 def lbl(text="", name=None, wrap=False):
@@ -122,7 +123,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         h.addWidget(self.stack, 1)
         for build in (self._monitor_page, self._events_page, self._dogs_page, self._zones_page,
-                      self._things_page, self._settings_page):
+                      self._things_page, self._behaviours_page, self._settings_page):
             self.stack.addWidget(build())
         self._tray()
 
@@ -600,6 +601,91 @@ class MainWindow(QMainWindow):
         self.things = dict(config.load().get("hazards") or {})
         self.refresh_things()
         return page
+
+    def _behaviours_page(self):
+        from ..risk import BEHAVIORS
+        page, v = self._page("Behaviours", "Decide how much each thing your dog does matters, and how long it must "
+                                           "go on before Bantay alerts. Warning and Danger speak and notify; Watch "
+                                           "only shows on screen. Changes apply live after Save and apply.")
+        c = card()
+        c.setMaximumWidth(900)
+        cv = QVBoxLayout(c)
+        cv.setContentsMargins(18, 16, 18, 16)
+        cv.setSpacing(12)
+        tbl = QTableWidget(len(BEHAVIORS), 3, objectName="things")
+        tbl.setHorizontalHeaderLabels(["BEHAVIOUR", "LEVEL", "ALERT AFTER"])
+        hh = tbl.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col, wdt in ((1, 200), (2, 170)):
+            hh.setSectionResizeMode(col, QHeaderView.Fixed)
+            hh.resizeSection(col, wdt)
+        hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        tbl.verticalHeader().setVisible(False)
+        tbl.verticalHeader().setDefaultSectionSize(52)
+        tbl.setAlternatingRowColors(True)
+        tbl.setShowGrid(False)
+        tbl.setSelectionMode(QAbstractItemView.NoSelection)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setFocusPolicy(Qt.NoFocus)
+        self.beh_rows = {}
+        for r, (key, (name, _lvl, sec)) in enumerate(BEHAVIORS.items()):
+            tbl.setItem(r, 0, QTableWidgetItem(name))
+            cb = QComboBox()
+            self._style_combo(cb)
+            cb.addItems(LEVEL_CHOICES)
+            tbl.setCellWidget(r, 1, self._cell(cb))
+            sp = None
+            if sec is not None:
+                sp = QSpinBox()
+                sp.setRange(1, 300)
+                sp.setSuffix(" s")
+                tbl.setCellWidget(r, 2, self._cell(sp))
+            else:
+                it = QTableWidgetItem("right away")
+                it.setForeground(QColor(T.MUTED))
+                tbl.setItem(r, 2, it)
+            self.beh_rows[key] = (cb, sp)
+        cv.addWidget(tbl, 1)
+        sv = QHBoxLayout()
+        sv.addWidget(lbl("Wrong activity on screen? Click the dog on the Monitor video and choose "
+                         "\"This dog is actually...\" to teach Bantay.", "faint", wrap=True), 1)
+        b_def = QPushButton("Reset to defaults")
+        b_def.clicked.connect(lambda: self.load_behaviours(defaults=True))
+        b_save = QPushButton("Save && apply", objectName="primary")
+        b_save.clicked.connect(self.save_behaviours)
+        sv.addWidget(b_def)
+        sv.addWidget(b_save)
+        cv.addLayout(sv)
+        v.addWidget(c, 1)
+        self.load_behaviours()
+        return page
+
+    @staticmethod
+    def _cell(w: QWidget) -> QWidget:
+        box = QWidget()
+        h = QHBoxLayout(box)
+        h.setContentsMargins(8, 0, 12, 0)
+        h.addWidget(w)
+        return box
+
+    def load_behaviours(self, defaults: bool = False):
+        from ..risk import BEHAVIORS
+        saved = {} if defaults else (config.load().get("behaviors") or {})
+        for key, (_n, lvl, sec) in BEHAVIORS.items():
+            cb, sp = self.beh_rows[key]
+            o = saved.get(key) or {}
+            cb.setCurrentIndex(int(o.get("level", lvl)))
+            if sp is not None:
+                sp.setValue(int(round(float(o.get("seconds", sec)))))
+
+    def save_behaviours(self):
+        beh = {k: ({"level": cb.currentIndex()} | ({"seconds": sp.value()} if sp is not None else {}))
+               for k, (cb, sp) in self.beh_rows.items()}
+        cfg = config.load()
+        cfg["behaviors"] = beh
+        config.save(cfg)
+        if self.worker.pipe:
+            self.worker.pipe.engine.set_behaviors(beh)
 
     def _settings_page(self):
         page = QWidget()

@@ -20,6 +20,27 @@ CHEW_LABELS = ("chewing something", "eating")
 BUSY_LABELS = ("digging", "scratching furniture", "jumping on furniture")
 SELF_CARE = ("scratching itself", "licking itself")
 REST_LABELS = ("sleeping", "lying down", "sitting", "standing")
+# What each behaviour means (editable on the Behaviours page -> config "behaviors").
+# key: (shown as, default level 0-3, default seconds before it counts or None)
+BEHAVIORS = {
+    "chewing":              ("Chewing something unknown", 2, 5.0),
+    "long_chewing":         ("Chewing for a long time", 3, 15.0),
+    "nose_down":            ("Nose down eating in one spot", 2, 6.0),
+    "rough_play":           ("Playing rough with another dog", 2, 3.0),
+    "fighting":             ("Fighting", 3, 8.0),
+    "digging":              ("Digging", 2, None),
+    "scratching furniture": ("Scratching furniture", 2, None),
+    "jumping on furniture": ("Jumping on furniture", 2, None),
+    "sniffing the floor":   ("Sniffing around", 1, None),
+    "licking itself":       ("Licking itself", 0, None),
+    "scratching itself":    ("Scratching itself", 0, None),
+    "walking":              ("Walking around", 0, None),
+    "standing":             ("Standing", 0, None),
+    "sitting":              ("Sitting", 0, None),
+    "lying down":           ("Lying down", 0, None),
+    "sleeping":             ("Sleeping", 0, None),
+}
+
 CALM_TEXT = {"sleeping": "sleeping", "lying down": "just lying down", "sitting": "just sitting",
              "standing": "just standing", "walking": "walking around",
              "licking itself": "licking itself", "scratching itself": "scratching itself"}
@@ -90,10 +111,29 @@ class RiskEngine:
         self.fight_danger_s = float(r.get("fight_danger_seconds", 8.0))
         self.chew_danger_s = float(r.get("chew_danger_seconds", 15))
         self.cooldown = {2: float(r.get("cooldown_warning", 20)), 3: float(r.get("cooldown_danger", 5))}
+        self.set_behaviors(cfg.get("behaviors") or {})
         self.vocab_tiers = {str(k): int(v) for k, v in (cfg.get("hazards") or {}).items()}
         self.tracks: dict[int, _Track] = {}
         self._last_alert = {2: float("-inf"), 3: float("-inf")}
         self.handovers: list = []
+
+    def set_behaviors(self, beh: dict) -> None:
+        """Owner-edited levels/seconds per behaviour (Behaviours page). Missing keys keep the defaults."""
+        self.beh = {}
+        for k, (_name, lvl, sec) in BEHAVIORS.items():
+            o = beh.get(k) or {}
+            self.beh[k] = (max(0, min(3, int(o.get("level", lvl)))),
+                           float(o["seconds"]) if sec is not None and o.get("seconds") is not None else sec)
+        self.chew_min_s = self.beh["chewing"][1]
+        self.chew_danger_s = self.beh["long_chewing"][1]
+        self.nose_down_s = self.beh["nose_down"][1]
+        self.fight_min_s = self.beh["rough_play"][1]
+        self.fight_danger_s = self.beh["fighting"][1]
+        self._calm_reasons = {"resting", "all calm"} | {
+            t for lab, t in CALM_TEXT.items() if self.beh.get(lab, (0,))[0] == 0}
+
+    def lvl(self, key: str) -> int:
+        return self.beh.get(key, (0, None))[0]
 
     # ------------------------------------------------------------------
     def update(self, dogs, hazards, zones, frame_size, now: float | None = None,
@@ -239,9 +279,9 @@ class RiskEngine:
             if tr.fight_since is not None:
                 dur = now - tr.fight_since
                 if dur >= self.fight_danger_s:
-                    add(3, "fighting - separate them")
+                    add(self.lvl("fighting"), "fighting - separate them")
                 elif dur >= self.fight_min_s:
-                    add(2, "playing rough - may turn into a fight")
+                    add(self.lvl("rough_play"), "playing rough - may turn into a fight")
 
             # ---------- behaviour rules ----------
             if chewing and calm_zone and not any(hz.tier >= 2 for hz in near) and not in_mouth:
@@ -249,19 +289,21 @@ class RiskEngine:
             elif chewing:
                 named = [hz for hz in near]
                 if not named and not in_mouth:
-                    add(2, "chewing an unknown object - check what it is")
+                    add(self.lvl("chewing"), "chewing an unknown object - check what it is")
                 if chew_for >= self.chew_danger_s:
-                    add(3, f"has been chewing for {int(chew_for)} s")
+                    add(self.lvl("long_chewing"), f"has been chewing for {int(chew_for)} s")
                 if zone_hit is not None and zone_hit.type == "danger":
                     add(3, "chewing in the danger zone")
             elif nose_down and not calm_zone:
-                add(2, "nose-down eating something in one spot - check what it is")
+                add(self.lvl("nose_down"), "nose-down eating something in one spot - check what it is")
             elif label in BUSY_LABELS and motion in ("active", "frantic"):
-                add(2, label)
+                add(self.lvl(label), label)
             elif motion == "frantic" and zone_hit is not None and zone_hit.type in ("trash", "nogo"):
                 add(2, f"frantic {ZONE_TEXT[zone_hit.type]}")
             elif label == "sniffing the floor" and conf >= 0.3:
-                add(1, "sniffing around")
+                add(self.lvl("sniffing the floor"), "sniffing around")
+            elif label in CALM_TEXT and conf >= 0.3 and self.lvl(label) > 0:
+                add(self.lvl(label), CALM_TEXT[label])     # owner made a normally-calm action count
 
             raw = max((r[0] for r in reasons), default=0)
             if on_bed and raw < 3 and not chewing:
@@ -313,7 +355,9 @@ class RiskEngine:
         now = time.monotonic() if now is None else now
         if not assessments:
             return None
-        live = [a for a in assessments if a.raw_level >= a.level]   # only alert while the cause is still happening
+        calm = self._calm_reasons
+        live = [a for a in assessments if a.raw_level >= a.level          # only while the cause is still happening
+                and a.reason.split(" on ")[0].split(" in ")[0] not in calm]  # never alert with a calm reason
         if not live:
             return None
         top = max(live, key=lambda a: a.level)
