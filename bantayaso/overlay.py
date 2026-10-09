@@ -23,6 +23,7 @@ _used: list = []
 
 def reset_labels():
     _used.clear()
+    _used.append((0, 0, 620, 52))          # keep the status pill area free
 
 
 def label(img, text, x, y, color, text_color=None):
@@ -49,7 +50,12 @@ def draw_dogs(img, dogs, levels: dict | None = None):
         color = C[LEVEL_KEY[a.level]] if a else C["caramel"]
         x1, y1, x2, y2 = d.box
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 3 if a and a.level >= 2 else 2)
-        tag = f"dog {d.conf:.2f}" if not a or a.level == 0 else f"dog - {a.reason}"
+        if a is None:
+            tag = f"dog {d.conf:.2f}"
+        elif a.level == 0:
+            tag = f"dog - {a.reason}" if a.reason not in ("all calm", "resting") else "dog - calm"
+        else:
+            tag = f"dog - {a.reason}"
         label(img, tag, x1, y1, color)
 
 
@@ -89,7 +95,10 @@ def draw_zones(img, zones, editor=None):
 
 def draw_status(img, text: str, color_key: str = "safe"):
     """Big status pill top-left (dog-related info only)."""
-    label(img, f"  {text}  ", 12, 40, C[color_key])
+    text = f"  {text}  "
+    (tw, th), _ = cv2.getTextSize(text, FONT, 0.55, 1)
+    cv2.rectangle(img, (12, 40 - th - 8), (12 + tw + 10, 40), C[color_key], -1)
+    cv2.putText(img, text, (17, 35), FONT, 0.55, C["bg"], 1, cv2.LINE_AA)
 
 
 def draw_recording(img, on: bool):

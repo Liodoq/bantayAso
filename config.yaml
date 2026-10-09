@@ -55,6 +55,7 @@ actions:
 - scratching itself
 - scratching furniture
 - jumping on furniture
+- licking itself
 zones: []
 risk:
   persist_seconds: 1.0

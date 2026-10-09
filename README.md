@@ -10,6 +10,6 @@ Built for the AppBuildersPH Hackathon 2026 (Local AI). Work in progress — setu
 python -m bantayaso                         # live from the action camera
 python -m bantayaso --source data\clips\rec_YYYYMMDD_HHMMSS.mp4   # test on a recorded clip
 ```
-Keys: **R** record clip · **C** save last 10 s · **S** snapshot · **Z** draw zones · **H** hazard boxes · **D** debug info · **Q** quit
+Keys (debug view **D** also shows each dog's action, mouth score and motion): **R** record clip · **C** save last 10 s · **S** snapshot · **Z** draw zones · **H** hazard boxes · **D** debug info · **Q** quit
 
 Tests (no camera/GPU): `python scripts\test_risk.py`

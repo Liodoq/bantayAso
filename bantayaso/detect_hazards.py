@@ -44,6 +44,31 @@ class HazardDetector:
         self.model.predict(np.zeros((imgsz, imgsz, 3), dtype=np.uint8), device=device,
                            half=self.half, verbose=False)
 
+    def detect_crop(self, frame: np.ndarray, box, conf: float | None = None) -> list[Hazard]:
+        """Mouth zoom: run on an enlarged crop around a dog and map boxes back to the frame.
+        No two-pass confirmation here (the caller only uses it while the dog is chewing)."""
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = box
+        pad = int(0.15 * max(x2 - x1, y2 - y1))
+        cx1, cy1, cx2, cy2 = max(0, x1 - pad), max(0, y1 - pad), min(w, x2 + pad), min(h, y2 + pad)
+        crop = frame[cy1:cy2, cx1:cx2]
+        if crop.size == 0:
+            return []
+        res = self.model.predict(crop, conf=conf or self.conf, imgsz=self.imgsz, device=self.device,
+                                 half=self.half, verbose=False)[0]
+        out = []
+        if res.boxes is None:
+            return out
+        for b, c, k in zip(res.boxes.xyxy.cpu().numpy(), res.boxes.conf.cpu().numpy(),
+                           res.boxes.cls.cpu().numpy().astype(int)):
+            name = res.names.get(int(k), "?")
+            tier = self.vocab.get(name, 1)
+            if tier <= 0:
+                continue
+            bx = (int(b[0]) + cx1, int(b[1]) + cy1, int(b[2]) + cx1, int(b[3]) + cy1)
+            out.append(Hazard(name, tier, bx, float(c)))
+        return out
+
     def __call__(self, frame: np.ndarray) -> list[Hazard]:
         res = self.model.predict(frame, conf=self.conf, imgsz=self.imgsz, device=self.device,
                                  half=self.half, verbose=False)[0]

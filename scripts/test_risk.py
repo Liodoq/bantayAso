@@ -7,6 +7,7 @@ from bantayaso.detect_dog import Dog            # noqa: E402
 from bantayaso.detect_hazards import Hazard     # noqa: E402
 from bantayaso.risk import RiskEngine           # noqa: E402
 from bantayaso.zones import Zone                # noqa: E402
+from bantayaso.actions import ActionResult      # noqa: E402
 
 CFG = {"risk": {"persist_seconds": 1.0, "calm_seconds": 2.0, "last_seen_memory_seconds": 5,
                 "muzzle_near_px": 60, "zone_dwell_seconds": 1.5, "cooldown_warning": 20,
@@ -21,10 +22,11 @@ bed = Zone("bed 1", "bed", [[0.3, 0.5], [0.7, 0.5], [0.7, 0.9], [0.3, 0.9]])
 fails = 0
 
 
-def run(engine, frames, hz, zones, t0=0.0, dt=0.1, fresh=True):
+def run(engine, frames, hz, zones, t0=0.0, dt=0.1, fresh=True, act=None):
     a = None
+    acts = {1: act} if act is not None else None
     for i in range(frames):
-        a = engine.update([dog], hz, zones, SIZE, now=t0 + i * dt, hazards_fresh=fresh)[0]
+        a = engine.update([dog], hz, zones, SIZE, now=t0 + i * dt, hazards_fresh=fresh, actions=acts)[0]
     return a, t0 + frames * dt
 
 
@@ -61,6 +63,41 @@ e = RiskEngine(CFG); a, _ = run(e, 15, [battery], [])
 check("first danger alert fires", e.should_alert([a], now=2.0) is not None)
 check("danger cooldown blocks repeat", e.should_alert([a], now=3.0) is None)
 check("danger re-alerts after cooldown", e.should_alert([a], now=8.0) is not None)
+
+# ---- Batch 3: actions (values taken from the user's real calibration clip) ----
+def A(label, conf, mouth, chew, motion="active"):
+    return ActionResult(label, conf, mouth, chew, motion)
+
+cases = [
+    ("sleeping dog is safe and says so", A("sleeping", .35, .13, .19), 20, [], [], 0, "sleeping"),
+    ("sitting dog says 'just sitting'", A("sitting", .34, .19, .19), 20, [], [], 0, "just sitting"),
+    ("lying dog says 'just lying down'", A("lying down", .4, .15, .2), 20, [], [], 0, "just lying down"),
+    ("scratching itself (score .18) is calm", A("scratching itself", .41, .23, .16), 60, [], [], 0, "scratching itself"),
+    ("real licking (score .30) is calm", A("licking itself", .35, .3, .3), 60, [], [], 0, "licking itself"),
+    ("eating labelled 'licking itself' (score .48) -> warning", A("licking itself", .25, .46, .5), 40, [], [], 2, "unknown object"),
+    ("eating labelled 'eating' (score .44) -> warning", A("eating", .3, .45, .44), 40, [], [], 2, "unknown object"),
+    ("brief eating (<2 s) does not warn yet", A("eating", .3, .45, .44), 15, [], [], 0, None),
+    ("eating over 10 s -> danger", A("eating", .3, .45, .44), 120, [], [], 3, "chewing for"),
+    ("eating near a battery -> danger", A("eating", .3, .45, .44), 40, [battery], [], 3, "battery"),
+    ("sleeping beside a battery -> warning only", A("sleeping", .35, .13, .19), 20, [battery], [], 2, "battery"),
+    ("sleeping beside a slipper -> watch only", A("sleeping", .35, .13, .19), 20, [slipper], [], 1, "slipper"),
+    ("eating on the bed still warns (comb case)", A("eating", .3, .45, .44), 40, [], [bed], 2, None),
+    ("frantic digging -> warning", A("digging", .4, .2, .2, "frantic"), 20, [], [], 2, "digging"),
+    ("nose down sniffing in one spot 5 s+ -> warning", A("sniffing the floor", .4, .25, .33), 60, [], [], 2, "nose-down"),
+    ("short sniff (2.5 s) -> only watch", A("sniffing the floor", .4, .25, .33), 25, [], [], 1, "sniffing"),
+]
+for name, act, frames, hz, zs, want, text in cases:
+    e = RiskEngine(CFG); a, _ = run(e, frames, hz, zs, act=act)
+    check(name, a.level == want and (text is None or text in a.reason), f"level {a.level}: {a.reason}")
+
+# tracker ID switch mid-chew: state carries over to the new ID
+e = RiskEngine(CFG); eat = A("eating", .3, .45, .44)
+for i in range(15):
+    e.update([dog], [], [], SIZE, now=i * 0.1, actions={1: eat})
+dog7 = Dog(7, (505, 302, 705, 502), 0.9)
+for i in range(15, 40):
+    a = e.update([dog7], [], [], SIZE, now=i * 0.1, actions={7: eat})[0]
+check("tracker ID switch keeps the chewing timer (warns on time)", a.level == 2, a.reason)
 
 print("ALL PASS" if fails == 0 else f"{fails} FAILED")
 sys.exit(1 if fails else 0)
