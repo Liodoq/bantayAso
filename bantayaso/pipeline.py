@@ -131,6 +131,10 @@ class Pipeline:
             self.classifier.on_teaching = self._teaching_event
 
     # ------------------------------------------------------------------
+    def reload_zones(self) -> None:
+        """Throw away unsaved zone edits: back to what config.yaml has."""
+        self.zones[:] = load_zones(config.load())
+
     def save_zones(self) -> None:
         latest = config.load()              # don't clobber edits made while running
         latest["zones"] = zones_to_cfg(self.zones)

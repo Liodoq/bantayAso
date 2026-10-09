@@ -54,6 +54,7 @@ class ZoneEditor:
         self.current: list = []
         self.type = "trash"
         self.pending_name = ""                  # optional custom name, e.g. "Sofa"
+        self.selected = None                    # index of the zone being edited in the app (handles shown)
         self.size = (1280, 720)
 
     def mouse(self, event, x, y, flags, param):

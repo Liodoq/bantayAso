@@ -82,10 +82,17 @@ def draw_zones(img, zones, editor=None, help_bar: bool = True):
             color = C[ZONE_KEY.get(z.type, "watch")]
             cv2.polylines(img, [poly], True, color, 2, cv2.LINE_AA)
             cv2.putText(img, z.name, tuple(poly[0] + [6, 20]), FONT, 0.55, color, 1, cv2.LINE_AA)
+    sel = getattr(editor, "selected", None) if editor is not None else None
+    if sel is not None and 0 <= sel < len(zones) and len(zones[sel].points) >= 3:
+        poly = zones[sel].poly(w, h)
+        cv2.polylines(img, [poly], True, C["caramel"], 3, cv2.LINE_AA)
+        for p in poly:                                   # drag handles
+            cv2.circle(img, tuple(int(v) for v in p), 9, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(img, tuple(int(v) for v in p), 9, C["caramel"], 3, cv2.LINE_AA)
     if editor is not None and editor.active:
         pts = [(int(x * w), int(y * h)) for x, y in editor.current]
-        for p in pts:
-            cv2.circle(img, p, 5, C["caramel"], -1)
+        for k, p in enumerate(pts):
+            cv2.circle(img, p, 8 if k == 0 else 5, C["caramel"], -1)    # the first corner is bigger: click it to close
         if len(pts) > 1:
             cv2.polylines(img, [np.array(pts, np.int32)], False, C["caramel"], 2, cv2.LINE_AA)
     if editor is not None and editor.active and help_bar:
