@@ -158,11 +158,8 @@ SCOPE_WORDS = (r"\bdogs?\b|\bpupp?(y|ies)\b|\baso\b|\baso(ng)?\b|\bpets?\b|\bhe\
                r"\bok\b|wrong|problem|today|minute|minuto|second|timeline|when|bed|trash|sofa|bowl|zone|"
                r"camera|battery|cable|toy|food|mouth|swallow|ginagawa|kumain|natutulog|bantay")
 
-OUT_OF_SCOPE = ("Sorry, that's not in my scope. I only watch your dogs. You can ask me: "
-                "\"What were my dogs doing for the past 2 minutes?\", \"Where are my dogs?\", "
-                "\"How many dogs do you see?\", or \"What happened today?\"")
-CANT_TELL = ("I can't tell that from what I've seen. Try asking what your dogs were doing in the last "
-             "1 to 10 minutes, where they are, or what happened today.")
+OUT_OF_SCOPE = "I can help with the camera view or something in Bantay. What would you like me to check?"
+CANT_TELL = "I don't have enough recorded information to answer that yet."
 
 
 def in_scope(q: str, known_names=()) -> bool:
@@ -346,18 +343,47 @@ def answer(question: str, pipe) -> str:
         return "Yes, I can hear you."
     if re.fullmatch(r"(hi|hello|hey|good (morning|afternoon|evening)|kumusta)[\s!.]*", ql):
         return "Hi! I'm watching them."
-    if re.search(r"\b(thank you|thanks|salamat)\b", ql):
-        return "You're welcome."
+    from .social import appreciation, recap, protect
+    social = appreciation(q, pipe)
+    if social:
+        return protect(pipe, social)
+    from .app_qa import app_answer
+    application_reply = app_answer(q, pipe)
+    if application_reply is not None:
+        return protect(pipe, application_reply)
+    previous = recap(q, pipe, known)
+    if previous:
+        return protect(pipe, previous)
     if re.search(r"who are you|what can you do|^help\b|how do i use you", ql):
         return ("I'm Bantay, your offline dog watcher. I can tell you what your dogs did in the last 1 to 10 "
                 "minutes, where they are, how many I see, and what alerts happened today.")
+    if re.fullmatch(r"(how long|gaano katagal)[?!. ]*", ql):
+        ql = 'how long has the dog been doing that'
+    # A disconnected camera must not answer a present-tense question from stale boxes.
+    frame_at = getattr(pipe, '_teaching_frame_at', None)
+    historical = re.search(r'past|last|today|earlier|kanina|timeline|when', ql)
+    if frame_at is not None and time.monotonic() - frame_at > 3 and not historical:
+        return "I don't have a fresh camera view, so I can't check the dogs right now."
+    from .scene import scene_answer
+    scene_subject = next((n for n in known if re.search(rf"\b{re.escape(n.lower())}\b",ql)),None)
+    scene_reply = scene_answer(ql, pipe, scene_subject)
+    if scene_reply is not None:
+        if scene_subject:
+            pipe._last_subject = scene_subject
+            pipe._last_subject_at = time.monotonic()
+        return scene_reply
     # guardrail 1: off-topic questions (homework, code, news...) are politely declined
-    if not in_scope(q, known):
+    if not in_scope(ql, known):
         return OUT_OF_SCOPE
     # which dog? explicit name, or a follow-up pronoun ("and him?", "what about her")
     subject = next((n for n in known if re.search(rf"\b{re.escape(n.lower())}\b", ql)), None)
-    if subject is None and re.search(r"\b(he|him|his|she|her|it|siya|niya)\b", ql):
-        subject = getattr(pipe, "_last_subject", None)
+    followup = re.search(r"\b(he|him|his|she|her|it|siya|niya)\b|how long|gaano katagal", ql)
+    if subject is None and followup:
+        if time.monotonic() - getattr(pipe, '_last_subject_at', 0) <= 60:
+            subject = getattr(pipe, '_last_subject', None)
+        if subject is None and len(st.boxes) > 1:
+            return 'Which dog do you mean?'
+
     pipe._last_subject = subject or getattr(pipe, "_last_subject", None)
     if subject:
         pipe._last_subject_at = time.monotonic()

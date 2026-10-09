@@ -5,6 +5,8 @@ Everything runs on background threads so the video never freezes.
 from __future__ import annotations
 
 import queue
+import itertools
+from .speech_text import spoken_text
 import threading
 import time
 from pathlib import Path
@@ -19,7 +21,11 @@ class Speaker:
     """
 
     def __init__(self, rate: int = 0, voice: str = ""):
-        self.q: "queue.Queue[str]" = queue.Queue(maxsize=4)
+        self.q = queue.PriorityQueue(maxsize=8)
+        self._sequence = itertools.count()
+        self._generation = 0
+        self._danger_until = 0.0
+        self.current_priority = 2
         self.rate = rate                 # SAPI rate -10 (slow) .. 10 (fast)
         self.voice_name = voice          # part of a voice name, e.g. "Zira"
         self.enabled = True
@@ -28,19 +34,43 @@ class Speaker:
         self._apply = True
         threading.Thread(target=self._run, name="Speaker", daemon=True).start()
 
-    def say(self, text: str, urgent: bool = False) -> None:
+    def say(self, text: str, urgent: bool = False, *, casual=False, valid=None, on_done=None) -> bool:
         if not self.enabled or not text:
-            return
-        if urgent:                                    # drop stale messages
-            while not self.q.empty():
-                try:
-                    self.q.get_nowait()
-                except queue.Empty:
-                    break
+            return False
+        priority = 0 if urgent else 2 if casual else 1
+        if urgent:
+            self._danger_until = time.monotonic() + 15
+        # Danger never gets displaced by a reply. Casual messages must be immediate.
+        if casual and (self.speaking or not self.q.empty() or time.monotonic() < self._danger_until):
+            return False
+        item = (priority, next(self._sequence), self._generation,
+                time.monotonic() + (2 if casual else 15), spoken_text(text), valid, on_done)
         try:
-            self.q.put_nowait(text)
+            self.q.put_nowait(item)
+            return True
         except queue.Full:
-            pass
+            if urgent:
+                # Evict the least important queued item under the queue's own lock.
+                import heapq
+                with self.q.mutex:
+                    worst = max(range(len(self.q.queue)), key=lambda i: self.q.queue[i][:2])
+                    self.q.queue[worst] = item
+                    heapq.heapify(self.q.queue)
+                return True
+            return False
+
+    def _danger_pending(self):
+        with self.q.mutex:
+            return any(item[0] == 0 for item in self.q.queue)
+
+    def stop(self):
+        """Cancel ordinary speech; a safety alert retains priority."""
+        self._generation += 1
+
+    def _valid(self, item, playing=False):
+        priority, _, generation, expires, _, valid, _ = item
+        return ((playing or time.monotonic() <= expires) and (priority == 0 or generation == self._generation)
+                and self.enabled and (valid is None or valid()))
 
     def set_voice(self, name: str = None, rate: int = None) -> None:
         if name is not None:
@@ -73,8 +103,13 @@ class Speaker:
         else:
             print("[BantayAso] Windows voice (SAPI) not available, trying pyttsx3")
         while True:
-            text = self.q.get()
+            item = self.q.get()
+            if not self._valid(item):
+                continue
+            priority, _, generation, _, text, valid, on_done = item
+            self.current_priority = priority
             self.speaking = True
+            completed = False
             try:
                 if sapi is not None:
                     if self._apply:
@@ -86,17 +121,30 @@ class Speaker:
                                 if self.voice_name.lower() in tokens.Item(i).GetDescription().lower():
                                     sapi.Voice = tokens.Item(i)
                                     break
-                    sapi.Speak(text)                     # blocking, on this thread only
+                    sapi.Speak(text, 1)  # async, COM remains on this thread
+                    while not sapi.WaitUntilDone(50):
+                        if (not self._valid(item, playing=True) or
+                                (priority > 0 and self._danger_pending())):
+                            sapi.Speak('', 3)  # async + purge current speech
+                            break
+                    else:
+                        completed = True
                 else:
                     import pyttsx3
                     eng = pyttsx3.init()
                     eng.say(text)
                     eng.runAndWait()
+                    completed = self._valid(item, playing=True)
             except Exception as e:                    # pragma: no cover
                 print(f"[BantayAso] voice error: {e!r}")
             finally:
                 time.sleep(0.25)                      # let the room go quiet before listening again
                 self.speaking = self.q.qsize() > 0
+                if completed and on_done:
+                    try:
+                        on_done()
+                    except Exception as e:
+                        print(f"[BantayAso] speech completion error: {e!r}")
 
 
 def toast(title: str, message: str, icon: Path | None = None) -> None:

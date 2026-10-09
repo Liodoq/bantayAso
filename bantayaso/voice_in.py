@@ -36,6 +36,16 @@ def looks_hallucinated(text: str, prompt: str = "") -> bool:
     return len(raw) > 40 and len(raw) / max(1, len(zlib.compress(raw))) > 2.4
 
 
+def prepare_audio(audio):
+    """Remove DC offset and apply bounded gain; never turn silence into loud noise."""
+    audio=np.asarray(audio,dtype=np.float32)
+    audio=np.nan_to_num(audio,nan=0.0,posinf=0.0,neginf=0.0)
+    audio=audio-float(np.mean(audio)) if audio.size else audio
+    rms=float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
+    if rms<0.001:return audio
+    return np.clip(audio*min(3.0,0.08/max(rms,1e-8)),-1,1)
+
+
 class Listener:
     def __init__(self, models_dir: Path, model: str = "base.en", language: str | None = "en",
                  is_speaking=lambda: False, log=print):
@@ -53,6 +63,7 @@ class Listener:
         self.vocab = ["Bantay", "BantayAso"]     # spelling hints for Whisper (dog names added later)
         self.on_heard = None                     # callback(text) for every hands-free utterance (debug view)
         self.level = 0.0
+        self.recording_speech = False
         self._expect_until = 0.0                 # after a bare "Bantay", the next sentence is the question
 
     # ---------------- model ----------------
@@ -81,6 +92,10 @@ class Listener:
         echoing the prompt ("Bantay, Bantay, BantayAso") and repetition loops ("six, six, six...")."""
         if audio is None or len(audio) < RATE * 0.4:
             return ""
+        audio = prepare_audio(audio)
+        if float(np.sqrt(np.mean(audio ** 2))) < 0.001:
+            self._state("too_quiet")
+            return ""
         model = self._load()
         kw = dict(language=self.language, fp16=getattr(self, "_fp16", False), beam_size=1,
                   condition_on_previous_text=False, temperature=0.0, no_speech_threshold=0.6)
@@ -98,23 +113,28 @@ class Listener:
         return "" if looks_hallucinated(text, kw.get("initial_prompt", "")) else text
 
     # ---------------- recording ----------------
-    def record_utterance(self, max_s: float = 8.0, wait_s: float = 6.0) -> np.ndarray | None:
+    def record_utterance(self, max_s: float = 12.0, wait_s: float = 6.0, hands_free: bool = False) -> np.ndarray | None:
         """Wait up to wait_s for speech, then record until ~1 s of silence (max max_s)."""
         import sounddevice as sd
         frames, started, silence, t0 = [], False, 0, time.monotonic()
         floor = None
         with sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=BLOCK) as st:
             while True:
+                if hands_free and (self.busy or not self.hands_free):
+                    self.recording_speech = False
+                    return None
                 block, _ = st.read(BLOCK)
                 block = block[:, 0].copy()
                 rms = float(np.sqrt(np.mean(block ** 2)) + 1e-9)
                 if floor is None:
-                    floor = rms
-                loud = rms > max(0.008, floor * 2.5)
+                    floor = min(rms, 0.003)
+                loud = rms > max(0.004, floor * 2.5)
                 if not loud and not started:                 # learn the room noise from quiet blocks only
                     floor = 0.95 * floor + 0.05 * rms
                 self.level = rms
+                self.recording_speech = started or loud
                 if self.is_speaking():
+                    self.recording_speech = False
                     frames, started, silence = [], False, 0
                     if time.monotonic() - t0 > wait_s + max_s:
                         return None
@@ -128,7 +148,7 @@ class Listener:
                     continue
                 frames.append(block)
                 silence = 0 if loud else silence + 1
-                if silence * BLOCK / RATE > 0.6 or time.monotonic() - t_start > max_s:
+                if silence * BLOCK / RATE > 0.85 or time.monotonic() - t_start > max_s:
                     break
         return np.concatenate(frames)
 
@@ -155,13 +175,21 @@ class Listener:
                 if self.on_text:
                     self.on_text("", True)
             finally:
+                self.recording_speech = False
                 self.busy = False
                 self._state("idle")
         threading.Thread(target=run, name="PushToTalk", daemon=True).start()
         return True
 
+    def open_followup(self):
+        if self.hands_free:
+            self._expect_until = time.monotonic() + 8
+            self._state('followup')
+
     def set_hands_free(self, on: bool) -> None:
         self.hands_free = on
+        if not on:
+            self._expect_until = 0.0
         if on and (self._hf_thread is None or not self._hf_thread.is_alive()):
             self._hf_thread = threading.Thread(target=self._hands_free_loop, name="HandsFree", daemon=True)
             self._hf_thread.start()
@@ -175,7 +203,8 @@ class Listener:
                 time.sleep(0.2)
                 continue
             try:
-                audio = self.record_utterance(max_s=8, wait_s=30)
+                audio = self.record_utterance(max_s=12, wait_s=30, hands_free=True)
+                self.recording_speech = False
                 if audio is None or not self.hands_free:
                     continue
                 text = self.transcribe(audio, hint=False)

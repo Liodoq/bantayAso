@@ -2,6 +2,10 @@
 
 Status: proposed next work after the approved six-issue repair. No new model weights have been trained. Written Oct 9, 2026; operational details and completed checks are in ../BRIEF.md. All quantities below are starting targets, not measured performance or guarantees.
 
+## Companion extension (October 10)
+
+See [COMPANION_TRAINING.md](COMPANION_TRAINING.md) for the current 81-example inventory and the owner's new goal: grounded natural conversation, timely calm updates, routines and occasions. Its 24 development scenarios are specifications, not completed model training. The original perception plan below remains applicable.
+
 ## Recommendation
 
 ### Owner recording checklist (Oct 9 follow-up)

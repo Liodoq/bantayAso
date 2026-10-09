@@ -61,18 +61,18 @@ a = answer("Bantay, is Choco okay to leave alone?", pipe)
 check("LLM invents 'battery' -> rejected, safe fallback used", "battery" not in a, a)
 check("guard keeps a faithful LLM answer", guard("Choco is chewing something; check on him.", "Choco chewing") is not None)
 a = answer("Alright, can you generate me a html code?", pipe)
-check("off-topic (code) is declined politely", a.startswith("Sorry, that's not in my scope"), a)
+check("off-topic (code) is declined politely", a.startswith("I can help with") and "not in my scope" not in a, a)
 a = answer("Bantay, what's the capital of France?", pipe)
-check("off-topic (trivia) is declined politely", a.startswith("Sorry"), a)
+check("off-topic (trivia) is declined politely", a.startswith("I can help with"), a)
 llm_reply["text"] = "OUT_OF_SCOPE"
 a = answer("Bantay, can the dog help me with my thesis?", pipe)
-check("LLM says OUT_OF_SCOPE -> polite decline", a.startswith("Sorry"), a)
+check("LLM says OUT_OF_SCOPE -> polite decline", a.startswith("I can help with"), a)
 llm_reply["text"] = "UNKNOWN"
 a = answer("Bantay, did Choco bark at the neighbor?", pipe)
-check("LLM says UNKNOWN -> can't-tell + suggestions", a.startswith("I can't tell"), a)
+check("LLM says UNKNOWN -> can't-tell + suggestions", a.startswith("I don't have enough recorded information"), a)
 llm_reply["text"] = None
 a = answer("Bantay, is the dog hungry?", pipe)
-check("in-scope but no LLM -> can't-tell (no random summary)", a.startswith("I can't tell") or "Choco" in a, a)
+check("in-scope but no LLM -> can't-tell (no random summary)", a.startswith("I don't have enough recorded information") or "Choco" in a, a)
 from bantayaso.qa import strip_wake  # noqa: E402
 for heard in ["Van Ty, what are my dogs doing?", "Ban tai what are my dogs doing", "bun tie, where are my dogs",
               "Ban-tay where are my dogs", "Pantay where are my dogs", "Hey Bantay, where are my dogs",

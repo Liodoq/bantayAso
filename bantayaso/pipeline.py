@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 import queue
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -87,6 +88,20 @@ class Pipeline:
         self.history = ActivityHistory(10)
         from .persona import Persona
         self.persona = Persona(config.DATA_DIR, llm_call=self._chat)
+        self._ask_lock = threading.Lock()
+        self._reply_generation = 0
+        self._asking = False
+        from .companion import Companion
+        self.companion = Companion()
+        self.companion_enabled = cfg.get('qa', {}).get('calm_checkins', True)
+        self._companion_observations = ()
+        self._companion_at = 0.0
+        from .scene import Presence
+        self.presence = Presence()
+        self.entry_alerts = cfg.get('qa', {}).get('entry_alerts', True)
+        self.scene = None
+        self._objects_at = 0.0
+        self.on_notice = None
         qa = cfg.get("qa", {})
         self.qa_model = qa.get("model", "qwen2.5:1.5b")
         self.ollama_url = cfg["models"].get("ollama_url", "http://localhost:11434")
@@ -292,6 +307,7 @@ class Pipeline:
         if self.hazard_det is not None and self._n % self.hazard_every == 0:
             t1 = time.perf_counter()
             self._hazards = self.hazard_det(frame)
+            self._objects_at = time.monotonic()
             st.timings["hazards"] = (time.perf_counter() - t1) * 1000
             fresh = True
         self._n += 1
@@ -378,6 +394,70 @@ class Pipeline:
             st.level = 0
             st.status = "No dog in view" if gone is None or gone > 3 else st.status
 
+        if hasattr(self, 'presence'):
+            reliable = self.aligner.status != 'lost' and not self.editor.active
+            zones = self.live_zones() if reliable else []
+            visible = [d for d in dogs if getattr(d, 'observed', True)]
+            rows=[]
+            for d in visible:
+                center=((d.box[0]+d.box[2])/2, (d.box[1]+d.box[3])/2)
+                memberships=[{'name':z.name,'type':z.type} for z in zones if z.contains(center,w,h)]
+                rows.append({'id':d.track_id,'name':names.get(d.track_id),'box':tuple(d.box),'zones':memberships})
+            self.scene={'at':time.monotonic(),'dogs':rows,'width':w,
+                        'zones':[{'name':z.name,'type':z.type} for z in zones], 'zones_reliable':reliable,
+                        'objects_enabled':self.hazard_det is not None, 'objects_at':self._objects_at,
+                        'objects':tuple(getattr(self.hazard_det,'scene_objects',()))}
+            counts={'camera':len(rows)}
+            if reliable:
+                counts.update({z.name:sum(any(m['name']==z.name for m in row['zones']) for row in rows) for z in zones})
+            else:
+                # Do not invent a zone entry when camera alignment recovers.
+                self.presence.stable={k:v for k,v in self.presence.stable.items() if k=='camera'}
+                self.presence.pending={k:v for k,v in self.presence.pending.items() if k=='camera'}
+            signature=tuple((z.name,tuple(tuple(p) for p in z.points)) for z in self.zones) if reliable else None
+            if signature != getattr(self,'_zone_entry_signature',None):
+                self.presence.stable={k:v for k,v in self.presence.stable.items() if k=='camera'}
+                self.presence.stable.update({k:v for k,v in counts.items() if k!='camera'})
+                self.presence.pending={k:v for k,v in self.presence.pending.items() if k=='camera'}
+                self._zone_entry_signature=signature
+            for area,text in self.presence.update(now, counts):
+                if not self.entry_alerts:
+                    continue
+                self.log('[ENTRY] '+text)
+                if self.on_notice:
+                    self.on_notice(text)
+                if not self.dnd:
+                    if self.toasts:
+                        toast('Bantay: dog in view',text)
+                    if self.voice and not self._asking and not (self.listener and (self.listener.busy or self.listener.recording_speech)):
+                        def valid_entry(area=area, minimum=counts.get(area,0)):
+                            current=self.scene['dogs']
+                            count=len(current) if area=='camera' else sum(any(z['name']==area for z in d['zones']) for d in current)
+                            return (self.voice and not self.dnd and self.entry_alerts and not self._asking
+                                    and self.state.level < 2 and time.monotonic()-self.scene['at']<2 and count>=minimum
+                                    and not (self.listener and (self.listener.busy or self.listener.recording_speech)))
+                        self.speaker.say(text,casual=True,valid=valid_entry)
+
+        # Calm check-ins use fresh detections, not held boxes or a language-model guess.
+        if hasattr(self, 'companion'):
+            observed = {d.track_id for d in dogs if getattr(d, 'observed', True)}
+            safe = {a.track_id: a.level == 0 for a in found}
+            self._companion_observations = tuple(
+                (d.track_id, names.get(d.track_id), getattr(self._actions.get(d.track_id), 'label', ''),
+                 d.track_id in observed and safe.get(d.track_id, False)
+                 and now - self._last_act < 2
+                 and getattr(self._actions.get(d.track_id), 'motion', '') == 'still') for d in dogs)
+            self._companion_at = now
+            message = self.companion.update(now, self._companion_observations,
+                                             blocked=not self._can_check_in())
+            if message:
+                episode = self.companion.key
+                def valid_checkin():
+                    return self._can_check_in(ignore_speaker=True) and self.companion.key == episode and time.monotonic() - self._companion_at < 2
+                if self.speaker.say(message, casual=True, valid=valid_checkin):
+                    self.companion.mark_spoken(now)
+                    self.log(f'[CHECK-IN] {message}')
+
         # ---------- drawing ----------
         view = frame.copy()
         overlay.reset_labels()
@@ -408,23 +488,63 @@ class Pipeline:
         return lines
 
     # ------------------------------------------------------------------ Ask Bantay
+    def _can_check_in(self, ignore_speaker=False):
+        listener = self.listener
+        return (self.companion_enabled and self.voice and not self.dnd and not self._asking
+                and self.state.level == 0 and (ignore_speaker or not getattr(self.speaker, "speaking", False))
+                and not (listener and (listener.busy or getattr(listener, 'recording_speech', False)
+                                        or time.monotonic() < listener._expect_until)))
+
+    def stop_reply(self):
+        self._reply_generation += 1
+        self.speaker.stop()
+        if self.listener:
+            self.listener._expect_until = 0.0
+
     def ask(self, question: str, speak: bool = True) -> str:
-        from .qa import answer, guard
-        if self.listener is not None and self.registry is not None:     # dog names help Whisper spell
-            self.listener.vocab = ["Bantay", "BantayAso", *self.registry.dogs.keys()]
+        from .qa import answer, guard, strip_wake, OUT_OF_SCOPE, CANT_TELL
+        import re
+        _, command = strip_wake(question)
+        if re.fullmatch(r'(stop( talking| speaking)?|be quiet|quiet|tama na)[.! ]*', command.lower()):
+            self.stop_reply()
+            return 'Okay.'
+        if not self._ask_lock.acquire(blocking=False):
+            return "I'm still finishing your previous question."
+        generation = self._reply_generation
+        self._asking = True
+        self.persona.already_styled = False
+        self.persona.protected_text = None
+        started = time.monotonic()
         try:
-            text = self.persona.style.command(question)          # "keep it short", "speak Tagalog"...
+            if self.listener is not None and self.registry is not None:
+                self.listener.vocab = ['Bantay', 'BantayAso', *self.registry.dogs.keys()]
+            text = self.persona.style.command(question)
             if text is None:
-                self.persona.style.observe(question)            # learn language / length / formality
+                self.persona.style.observe(question)
                 text = answer(question, self)
                 text = self.persona.finish(question, text, guard)
-        except Exception as e:                     # pragma: no cover
-            text = "Sorry, I couldn't work that out."
-            self.log(f"[BantayAso] Q&A error: {e}")
-        self.log(f"[ASK] {question!r} -> {text}")
-        if speak and self.voice:
-            self.speaker.say(text, urgent=True)
-        return text
+            if generation != self._reply_generation:
+                return ''
+            repeat_fallback = False
+            if text in (OUT_OF_SCOPE, CANT_TELL):
+                stamp=time.monotonic()
+                repeat_fallback=(getattr(self,'_fallback_text',None)==text and stamp-getattr(self,'_fallback_at',0)<30)
+                if not repeat_fallback:
+                    self._fallback_text,self._fallback_at=text,stamp
+            self.log(f'[ASK {time.monotonic() - started:.2f}s] {question!r} -> {text}')
+            follow_up = self.listener.open_followup if self.listener else None
+            if speak and self.voice and not self.dnd and not repeat_fallback:
+                self.speaker.say(text, valid=lambda: self.voice and not self.dnd and generation == self._reply_generation,
+                                 on_done=follow_up)
+            elif follow_up:
+                follow_up()
+            return text
+        except Exception as e:
+            self.log(f'[BantayAso] Q&A error: {e}')
+            return "Sorry, I couldn't work that out."
+        finally:
+            self._asking = False
+            self._ask_lock.release()
 
     def _chat(self, messages: list, schema: dict | None, max_tokens: int) -> str | None:
         """One local Ollama chat call (structured JSON output when supported)."""
@@ -434,10 +554,10 @@ class Pipeline:
                     "options": {"temperature": 0.1, "num_predict": max_tokens, "num_ctx": 2048}}
             if schema:
                 body["format"] = schema
-            r = requests.post(self.ollama_url.rstrip("/") + "/api/chat", json=body, timeout=20)
+            r = requests.post(self.ollama_url.rstrip("/") + "/api/chat", json=body, timeout=(2, 8))
             if r.status_code >= 400 and schema:          # older Ollama: no schema support -> plain JSON mode
                 body["format"] = "json"
-                r = requests.post(self.ollama_url.rstrip("/") + "/api/chat", json=body, timeout=20)
+                r = requests.post(self.ollama_url.rstrip("/") + "/api/chat", json=body, timeout=(2, 8))
             r.raise_for_status()
             return ((r.json().get("message") or {}).get("content") or "").strip() or None
         except Exception as e:
@@ -467,7 +587,7 @@ class Pipeline:
         self.log(f"[ALERT {LEVELS[a.level].upper()}] {time.strftime('%H:%M:%S')} {text}")
         if not self.dnd:
             if self.voice:
-                self.speaker.say(text, urgent=a.level == 3)
+                self.speaker.say(text, urgent=a.level == 3, valid=lambda: self.voice and not self.dnd)
             if self.toasts:
                 toast(f"BantayAso - {LEVELS[a.level].upper()}", text)
             if a.level == 3 and self.owner_clip:
@@ -480,7 +600,7 @@ class Pipeline:
                     self.events.set_vlm(ev["id"], sentence)
                     self.log(f"[LOCAL AI] {sentence}")
                     if self.speak_vlm and self.voice and not self.dnd:
-                        self.speaker.say(sentence, urgent=False)
+                        self.speaker.say(sentence, urgent=False, valid=lambda: self.voice and not self.dnd)
                     if self.on_event:
                         self.on_event(ev)
                 self.vlm.describe(frame, box, done)

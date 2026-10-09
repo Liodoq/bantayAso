@@ -30,6 +30,7 @@ class HazardDetector:
         self.device, self.conf, self.imgsz = device, conf, imgsz
         self.confirm = confirm
         self._prev: list[Hazard] = []
+        self.scene_objects = []
         self.half = device.startswith("cuda")
         self.model = YOLO(str(weights))
         self.weights = Path(weights)
@@ -53,6 +54,7 @@ class HazardDetector:
         self.vocab = {str(k): int(v) for k, v in vocab.items()}
         self.names = list(self.vocab.keys())
         self._prev = []
+        self.scene_objects = []
         self._set_vocab()
 
     def detect_crop(self, frame: np.ndarray, box, conf: float | None = None) -> list[Hazard]:
@@ -89,13 +91,13 @@ class HazardDetector:
                                res.boxes.cls.cpu().numpy().astype(int)):
                 name = res.names.get(int(k), self.names[int(k)] if int(k) < len(self.names) else "?")
                 tier = self.vocab.get(name, 1)
-                if tier <= 0:          # distractor words (dog collar, paw, pillow...) absorb look-alikes
-                    continue
                 raw.append(Hazard(name, tier, tuple(int(v) for v in b), float(c)))
         if not self.confirm:
-            return raw
+            self.scene_objects = raw
+            return [h for h in raw if h.tier > 0]
         # keep only objects also seen (same word, nearby) in the previous pass -> kills one-off ghosts
         out = [h for h in raw if any(p.name == h.name and abs(p.center[0] - h.center[0]) < 60
                                      and abs(p.center[1] - h.center[1]) < 60 for p in self._prev)]
         self._prev = raw
-        return out
+        self.scene_objects = out
+        return [h for h in out if h.tier > 0]

@@ -39,7 +39,7 @@ Speak objectively, like a careful observer reading a log:
 - Lead with the direct answer, then at most one supporting detail. No greetings, no filler, no exclamation marks.
 - Describe what the camera saw ("Oreo was lying on the bed for 3 minutes"), not feelings or intentions ("Oreo is happy/bored").
 - If a fact says something is risky (warning/danger), mention it first.
-- If the facts don't answer the question, status is "unknown". If the question is not about the dogs or the camera, status is "out_of_scope".
+- If the facts don't answer the question, status is "unknown". If the question is not about the dogs, camera or supplied application facts, status is "out_of_scope".
 - No medical advice; for health worries say to contact a vet.
 Return JSON only."""
 
@@ -220,13 +220,19 @@ class Persona:
             status, ans = "answer", raw.strip().split("\n")[0]
         if status not in ("answer", "unknown", "out_of_scope"):
             status = "answer" if ans else "unknown"
+        self.already_styled = status == "answer" and bool(ans)
         return status, ans
 
     def finish(self, question: str, text: str, guard=None) -> str:
         """Shape a template/LLM answer to the owner's preferences and remember the turn."""
+        if text == getattr(self, 'protected_text', None):
+            # Keep coverage/uncertainty and danger details intact; no LLM embellishment.
+            self.turns.append((question, text))
+            self.protected_text = None
+            return text
         lang, length, tone = self.style.effective()
         out = text
-        if lang != "en" and self.llm_call and len(text) > 12 and text != "Yes?":
+        if lang != "en" and self.llm_call and not getattr(self, "already_styled", False) and len(text) > 12 and text != "Yes?":
             msgs = [{"role": "system", "content": "Rewrite the message for a Filipino dog owner. Keep every fact, "
                                                   "name and number exactly. Add nothing. Return JSON only."},
                     {"role": "user", "content": f"Language: {LANG_NAME[lang]}. Tone: {tone}. Message: {text}"}]

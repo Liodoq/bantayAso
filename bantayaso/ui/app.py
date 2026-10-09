@@ -226,6 +226,15 @@ class MainWindow(QMainWindow):
         self.btn_bantay.setProperty("menu", True)
         m = self._round_menu(QMenu(self))
         self.act_ask = m.addAction("Ask now (push to talk)\tF2", self.ask_voice)
+        m.addAction('Stop speaking', self.stop_speaking)
+        self.act_checkins = m.addAction('Calm check-ins')
+        self.act_checkins.setCheckable(True)
+        self.act_checkins.setChecked(config.load().get('qa', {}).get('calm_checkins', True))
+        self.act_checkins.toggled.connect(self.set_checkins)
+        self.act_entries = m.addAction('Announce dogs entering')
+        self.act_entries.setCheckable(True)
+        self.act_entries.setChecked(config.load().get('qa', {}).get('entry_alerts', True))
+        self.act_entries.toggled.connect(self.set_entries)
         m.addSeparator()
         self.act_hf = m.addAction("Hands-free: listen for \"Bantay\"")
         self.act_hf.setCheckable(True)
@@ -1005,7 +1014,7 @@ class MainWindow(QMainWindow):
         if self.worker.pipe is None:
             self.video.placeholder = msg
             self.video.update()
-        if any(k in msg for k in ("Recording", "Saved", "Snapshot", "Switched")):
+        if any(k in msg for k in ("Recording", "Saved", "Snapshot", "Switched", "Entry:")):
             self.subtitle.setText(msg)
 
     def on_frame(self, img, st: dict):
@@ -1144,8 +1153,29 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     # ================================================================== Ask Bantay
+    def stop_speaking(self):
+        if self.worker.pipe:
+            self.worker.pipe.stop_reply()
+        self.ask_answer.setText('Stopped.')
+
+    def set_entries(self, on):
+        if self.worker.pipe:
+            self.worker.pipe.entry_alerts = on
+        cfg=config.load()
+        cfg.setdefault('qa', {})['entry_alerts']=on
+        config.save(cfg)
+
+    def set_checkins(self, on):
+        if self.worker.pipe:
+            self.worker.pipe.companion_enabled = on
+        cfg = config.load()
+        cfg.setdefault('qa', {})['calm_checkins'] = on
+        config.save(cfg)
+
     def ask_voice(self):
         lst = self.worker.pipe.listener if self.worker.pipe else None
+        if lst and not lst.busy:
+            self.worker.pipe.stop_reply()
         if lst and lst.push_to_talk():
             self.ask_answer.setText("Listening... ask your question.")
 
@@ -1158,12 +1188,15 @@ class MainWindow(QMainWindow):
         self.set_hf_cb.setChecked(on)
 
     def on_mic_state(self, s: str):
+        if s == "too_quiet":
+            self.heard_label.setText("Microphone audio is too quiet. Move closer or raise the input volume.")
+            return
         if s.startswith("heard:"):
             self.heard_label.setText(f"Heard: “{s[6:]}”")
             return
         hf = self.act_hf.isChecked()
         self.btn_bantay.setText({"listening": "Listening…", "thinking": "Thinking…",
-                                 "hf_error": "Mic problem"}.get(s, "Bantay (listening)" if hf else "Bantay"))
+                                 "followup": "Listening for a follow-up…", "hf_error": "Mic problem"}.get(s, "Bantay (listening)" if hf else "Bantay"))
 
     def on_heard(self, text: str, _woke: bool):
         if not text:
@@ -1181,6 +1214,10 @@ class MainWindow(QMainWindow):
         threading.Thread(target=lambda: self.answered.emit(q, pipe.ask(q)), daemon=True).start()
 
     def on_answered(self, q: str, a: str):
+        if not a:
+            return
+        from html import escape
+        q, a = escape(q), escape(a)
         self.ask_answer.setText(f"<span style='color:{T.MUTED}'>You: {q}</span><br>"
                                 f"<b style='color:{T.CARAMEL}'>Bantay:</b> {a}")
 

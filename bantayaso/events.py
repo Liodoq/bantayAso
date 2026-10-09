@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 import threading
 import time
 from pathlib import Path
@@ -35,8 +36,14 @@ class EventLog:
         with self._conn() as c:
             c.executescript(SCHEMA)
 
+    @contextmanager
     def _conn(self):
-        return sqlite3.connect(self.db_path, timeout=5)
+        c = sqlite3.connect(self.db_path, timeout=5)
+        try:
+            with c:
+                yield c
+        finally:
+            c.close()
 
     def add(self, assessment, frame=None, dog_label: str | None = None) -> int:
         ts = time.time()
@@ -68,6 +75,28 @@ class EventLog:
             rows = c.execute("SELECT * FROM events WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
                              (start, limit)).fetchall()
         return [dict(r) for r in rows]
+
+    def recent(self, dog=None, today=False, limit=100):
+        conditions=['false_alarm = 0']; args=[]
+        if dog:
+            conditions.append('dog = ? COLLATE NOCASE'); args.append(dog)
+        if today:
+            conditions.append('ts >= ?')
+            args.append(time.mktime(time.localtime()[:3]+(0,0,0,0,0,-1)))
+        args.append(max(1,min(int(limit),100)))
+        with self._conn() as c:
+            c.row_factory=sqlite3.Row
+            rows=c.execute('SELECT * FROM events WHERE '+' AND '.join(conditions)+' ORDER BY ts DESC, id DESC LIMIT ?',args).fetchall()
+        return [dict(row) for row in rows]
+
+    def for_dog_today(self, name: str) -> list[dict]:
+        """Latest genuine alerts for one named dog, independent of other dogs' event volume."""
+        start = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute("SELECT * FROM events WHERE ts >= ? AND dog = ? COLLATE NOCASE "
+                             "AND false_alarm = 0 ORDER BY ts DESC LIMIT 3", (start, name)).fetchall()
+        return [dict(row) for row in rows]
 
     def summary_today(self) -> dict:
         ev = self.today(1000)

@@ -75,13 +75,13 @@ class ActivityHistory:
         segs = self.segments(minutes, who)
         if not segs:
             return f"I haven't seen {'any dog' if not who else who} in the last {fmt_dur(minutes * 60)}."
-        clock = lambda t: time.strftime("%I:%M", time.localtime(t)).lstrip("0")
+        clock = lambda t: time.strftime("%I:%M %p", time.localtime(t)).lstrip("0")
         parts = []
         for st_, en, w, act, zone in segs[-6:]:
             name = default_name if w == "unnamed" else w
-            where = f" ({zone})" if zone else ""
-            parts.append(f"{clock(st_)}–{clock(en)} {name} was {act}{where}")
-        return "; ".join(parts) + "."
+            where = f" in {zone}" if zone else ""
+            parts.append(f"{name} was {act}{where} from {clock(st_)} to {clock(en)}")
+        return ". ".join(parts) + "."
 
     def summary(self, minutes: int, now: float | None = None) -> dict:
         now = now or time.monotonic()
@@ -118,7 +118,7 @@ class ActivityHistory:
             for act, n in top[1:3]:
                 if n >= 3:
                     bits.append(f"{act} for about {fmt_dur(n / max(1, s['max_dogs'] if who == 'unnamed' else 1))}")
-            parts.append(f"{name} {'were' if name.endswith('dogs') else 'was'} " + ", then ".join(bits))
+            parts.append(f"{name} {'were' if name.endswith('dogs') else 'was'} " + ", and ".join(bits))
         span = "minute" if minutes == 1 else f"{minutes} minutes"
         note = "" if s["covered_s"] >= minutes * 60 - 5 else f" (I've only been watching for {fmt_dur(s['covered_s'])})"
         return f"In the last {span}{note}, " + ". ".join(parts) + "."

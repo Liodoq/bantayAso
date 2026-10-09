@@ -63,6 +63,7 @@ class Worker(QThread):
             self.message.emit(f"Could not load the AI models: {e}")
             src.stop()
             return
+        self.pipe.on_notice = lambda text: self.message.emit("Entry: " + text)
         self.pipe.on_event = lambda ev: self.event.emit(dict(ev))
         self.pipe.on_teaching = lambda ev: self.teaching.emit(dict(ev))
         rec = ClipRecorder(config.DATA_DIR / "clips", seconds=cfg.get("capture", {}).get("buffer_seconds", 10),
