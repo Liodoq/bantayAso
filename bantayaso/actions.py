@@ -112,6 +112,10 @@ class ActionClassifier:
         self.embeddings: dict[int, np.ndarray] = {}     # tid -> whole-dog image embedding (names)
         # "Teach Bantay": the owner's own labelled examples per action (data/actions/<label>.npy)
         self.examples_dir = Path(models_dir).parent / "data" / "actions"
+        import sys
+        if getattr(sys, "frozen", False):          # installed app: lessons live with the user's data
+            from . import config
+            self.examples_dir = config.DATA_DIR / "actions"
         self.examples_dir.mkdir(parents=True, exist_ok=True)
         self.examples: dict[str, np.ndarray] = {}
         for f in self.examples_dir.glob("*.npy"):
