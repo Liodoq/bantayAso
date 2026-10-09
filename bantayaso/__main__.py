@@ -7,6 +7,7 @@
 Keys (click the video window first):
   R  start/stop recording a clip      C  save the last 10 seconds
   S  save a snapshot                  D  show/hide debug info (FPS, device)
+  Z  draw zones (see the help bar)     H  show/hide hazard boxes
   Q  quit
 """
 from __future__ import annotations
@@ -19,6 +20,8 @@ import numpy as np
 
 from . import config, overlay
 from .capture import ClipRecorder, FrameSource
+from .risk import LEVELS, RiskEngine
+from .zones import ZoneEditor, load_zones, zones_to_cfg
 
 WINDOW = "BantayAso"
 
@@ -27,6 +30,7 @@ def parse_args():
     p = argparse.ArgumentParser(prog="bantayaso")
     p.add_argument("--source", help="USB index (e.g. 1) or path to a video file")
     p.add_argument("--no-detect", action="store_true", help="camera only, no AI (for testing)")
+    p.add_argument("--no-hazards", action="store_true", help="dog detection only")
     p.add_argument("--debug", action="store_true", help="start with the debug overlay on")
     return p.parse_args()
 
@@ -55,7 +59,22 @@ def main() -> None:
         detector = DogDetector(config.MODELS_DIR / cfg["models"]["dog_detector"], device=device,
                                conf=det_cfg.get("dog_conf", 0.35), imgsz=det_cfg.get("imgsz", 640))
 
+    hazard_det = None
+    if not args.no_detect and not args.no_hazards:
+        from .detect_hazards import HazardDetector
+        print("[BantayAso] loading hazard detector...")
+        hazard_det = HazardDetector(config.MODELS_DIR / cfg["models"]["hazard_detector"],
+                                    cfg.get("hazards", {}), device=device,
+                                    conf=det_cfg.get("hazard_conf", 0.15),
+                                    imgsz=det_cfg.get("hazard_imgsz", 640))
+    hazard_every = int(det_cfg.get("hazard_every", 3))
+    zones = load_zones(cfg)
+    editor = ZoneEditor(zones)
+    engine = RiskEngine(cfg)
+    hazards, show_hazards, n_frame, hz_ms = [], True, 0, 0.0
+
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(WINDOW, editor.mouse)
     cv2.resizeWindow(WINDOW, 1280, 720)
     show_debug = args.debug
     last_id = 0
@@ -84,17 +103,42 @@ def main() -> None:
             recorder.push(frame)                     # clean frame (no boxes) for test clips
 
             view = frame.copy()
+            overlay.reset_labels()
+            editor.size = (frame.shape[1], frame.shape[0])
+            overlay.draw_zones(view, zones, editor)
             if detector is not None:
                 t0 = time.perf_counter()
                 dogs = detector(frame)
                 infer_ms = (time.perf_counter() - t0) * 1000
+                fresh = False
+                if hazard_det is not None and n_frame % hazard_every == 0:
+                    t1 = time.perf_counter()
+                    hazards = hazard_det(frame)
+                    hz_ms = (time.perf_counter() - t1) * 1000
+                    fresh = True
+                n_frame += 1
+                found = engine.update(dogs, hazards, zones, (frame.shape[1], frame.shape[0]),
+                                      hazards_fresh=fresh)
+                by_id = {a.track_id: a for a in found}
+                if show_hazards:
+                    overlay.draw_hazards(view, hazards)
                 if dogs:
                     last_seen = time.monotonic()
-                    overlay.draw_dogs(view, dogs)
-                    overlay.draw_status(view, "Watching your dog", "safe")
+                    overlay.draw_dogs(view, dogs, by_id)
+                    top = max(found, key=lambda a: a.level)
+                    if top.level == 0:
+                        overlay.draw_status(view, "All calm" if top.reason == "all calm" else
+                                            top.reason.capitalize(), "safe")
+                    else:
+                        overlay.draw_status(view, f"{LEVELS[top.level].upper()}: dog {top.reason}",
+                                            overlay.LEVEL_KEY[top.level])
+                    alert = engine.should_alert(found)
+                    if alert is not None:
+                        print(f"[ALERT {LEVELS[alert.level].upper()}] {time.strftime('%H:%M:%S')} "
+                              f"dog {alert.reason}")
                 else:
                     gone = time.monotonic() - last_seen if last_seen else None
-                    msg = "No dog in view" if gone is None or gone > 3 else "Watching your dog"
+                    msg = "No dog in view" if gone is None or gone > 3 else "All calm"
                     overlay.draw_status(view, msg, "watch" if msg == "No dog in view" else "safe")
 
             overlay.draw_recording(view, recorder.is_recording)
@@ -104,12 +148,27 @@ def main() -> None:
                 fps, frames, t_fps = frames / (now - t_fps), 0, now
             if show_debug:
                 overlay.draw_debug(view, [f"FPS {fps:.1f}", f"detect {infer_ms:.0f} ms",
+                                          f"hazards {hz_ms:.0f} ms every {hazard_every}",
                                           f"device {device}", f"source {source}"])
             if toast and time.monotonic() < toast_until:
                 overlay.draw_toast(view, toast)
             cv2.imshow(WINDOW, view)
 
             key = cv2.waitKey(1) & 0xFF
+            if editor.key(key):
+                continue
+            if key in (ord("z"), ord("Z")):
+                if editor.active:
+                    editor.finish()
+                    latest = config.load()            # don't clobber edits made while running
+                    latest["zones"] = zones_to_cfg(zones)
+                    config.save(latest)
+                    notify(f"Zones saved ({len(zones)})")
+                editor.active = not editor.active
+                continue
+            if key in (ord("h"), ord("H")):
+                show_hazards = not show_hazards
+                continue
             if key in (ord("q"), ord("Q")) or cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                 break
             elif key in (ord("d"), ord("D")):

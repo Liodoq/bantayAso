@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import cv2
+import numpy as np
 
 
 def hex_bgr(h: str):
@@ -17,20 +18,73 @@ C = {
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
+_used: list = []
+
+
+def reset_labels():
+    _used.clear()
+
+
 def label(img, text, x, y, color, text_color=None):
     (tw, th), _ = cv2.getTextSize(text, FONT, 0.55, 1)
     y = max(y, th + 8)
+    for _ in range(6):                       # push down until it does not cover another label
+        r = (x, y - th - 8, x + tw + 10, y)
+        if not any(r[0] < u[2] and u[0] < r[2] and r[1] < u[3] and u[1] < r[3] for u in _used):
+            break
+        y += th + 10
+    _used.append((x, y - th - 8, x + tw + 10, y))
     cv2.rectangle(img, (x, y - th - 8), (x + tw + 10, y), color, -1)
     cv2.putText(img, text, (x + 5, y - 5), FONT, 0.55, text_color or C["bg"], 1, cv2.LINE_AA)
 
 
-def draw_dogs(img, dogs, color_key: str = "caramel"):
-    color = C[color_key]
+LEVEL_KEY = ["caramel", "watch", "warning", "danger"]
+ZONE_KEY = {"trash": "warning", "danger": "danger", "nogo": "watch", "bed": "safe"}
+
+
+def draw_dogs(img, dogs, levels: dict | None = None):
+    """levels: track_id -> Assessment (optional) to color each dog by its risk."""
     for d in dogs:
+        a = (levels or {}).get(d.track_id)
+        color = C[LEVEL_KEY[a.level]] if a else C["caramel"]
         x1, y1, x2, y2 = d.box
-        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-        tag = f"dog {d.conf:.2f}"
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 3 if a and a.level >= 2 else 2)
+        tag = f"dog {d.conf:.2f}" if not a or a.level == 0 else f"dog - {a.reason}"
         label(img, tag, x1, y1, color)
+
+
+def draw_hazards(img, hazards):
+    for hz in hazards:
+        color = C[{3: "danger", 2: "warning"}.get(hz.tier, "watch")]
+        x1, y1, x2, y2 = hz.box
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 1)
+        label(img, f"{hz.name} {hz.conf:.2f}", x1, y2 + 22, color)
+
+
+def draw_zones(img, zones, editor=None):
+    h, w = img.shape[:2]
+    layer = img.copy()
+    for z in zones:
+        if len(z.points) >= 3:
+            poly = z.poly(w, h)
+            cv2.fillPoly(layer, [poly], C[ZONE_KEY.get(z.type, "watch")])
+    cv2.addWeighted(layer, 0.18, img, 0.82, 0, img)
+    for z in zones:
+        if len(z.points) >= 3:
+            poly = z.poly(w, h)
+            color = C[ZONE_KEY.get(z.type, "watch")]
+            cv2.polylines(img, [poly], True, color, 2, cv2.LINE_AA)
+            cv2.putText(img, z.name, tuple(poly[0] + [6, 20]), FONT, 0.55, color, 1, cv2.LINE_AA)
+    if editor is not None and editor.active:
+        pts = [(int(x * w), int(y * h)) for x, y in editor.current]
+        for p in pts:
+            cv2.circle(img, p, 5, C["caramel"], -1)
+        if len(pts) > 1:
+            cv2.polylines(img, [np.array(pts, np.int32)], False, C["caramel"], 2, cv2.LINE_AA)
+        help_ = (f"ZONE EDIT - type: {editor.type.upper()}  |  click: add point  right-click/ENTER: finish  "
+                 "1 trash 2 danger 3 no-go 4 bed  BACKSPACE: undo  X: delete last  Z: save & exit")
+        cv2.rectangle(img, (0, h - 34), (w, h), C["bg"], -1)
+        cv2.putText(img, help_, (10, h - 12), FONT, 0.5, C["caramel"], 1, cv2.LINE_AA)
 
 
 def draw_status(img, text: str, color_key: str = "safe"):
