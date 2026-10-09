@@ -131,7 +131,14 @@ class ClipRecorder:
 
     def _new_writer(self, size, tag: str):
         path = self.out_dir / f"{tag}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
+        base, suffix = path, 1
+        while path.exists():   # repeated clicks in one second must not overwrite an earlier lesson
+            path = base.with_name(f'{base.stem}_{suffix}{base.suffix}')
+            suffix += 1
         writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), self.fps, size)
+        if not writer.isOpened():
+            writer.release()
+            raise OSError('Could not create the video file. Check the clips folder and video encoder.')
         return path, writer
 
     def save_last(self) -> Path | None:

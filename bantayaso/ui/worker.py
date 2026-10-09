@@ -17,6 +17,7 @@ class Worker(QThread):
     event = Signal(dict)
     ready = Signal()
     teaching = Signal(dict)
+    clip_saved = Signal(str)
 
     def __init__(self, args, parent=None):
         super().__init__(parent)
@@ -80,6 +81,7 @@ class Worker(QThread):
                     self.message.emit(f"Switched camera to {new}")
                 fid, frame = src.read()
                 if frame is None or fid == last_id:
+                    self._handle_requests(rec, None)  # allow Stop even after camera disconnect
                     if time.monotonic() - last_frame_t > 2:
                         self.pipe.cancel_teaching('Camera frames stopped arriving.')
                     if time.monotonic() - last_frame_t > 4 and self.camera_ok:
@@ -127,13 +129,33 @@ class Worker(QThread):
             return
         reqs, self._req = self._req, set()
         if "record" in reqs:
-            path = rec.toggle((frame.shape[1], frame.shape[0]))
-            self.recording = rec.is_recording
-            self.message.emit(f"Recording {path.name}..." if rec.is_recording else f"Saved clip {path.name}")
+            if frame is None and not rec.is_recording:
+                self._req.add('record')
+            else:
+                size = (frame.shape[1], frame.shape[0]) if frame is not None else (0, 0)
+                try:
+                    path = rec.toggle(size)
+                except OSError as exc:
+                    self.recording = rec.is_recording
+                    self.message.emit(f'Recording failed: {exc}')
+                    return
+                self.recording = rec.is_recording
+                self.message.emit(f"Recording {path.name}..." if rec.is_recording else f"Saved clip {path.name}")
+                if not rec.is_recording:
+                    self.clip_saved.emit(str(path))
         if "last" in reqs:
-            path = rec.save_last()
-            self.message.emit(f"Saved last 10 s: {path.name}" if path else "Nothing to save yet")
+            try:
+                path = rec.save_last()
+            except OSError as exc:
+                self.message.emit(f'Recording failed: {exc}')
+            else:
+                self.message.emit(f"Saved last 10 s: {path.name}" if path else "Nothing to save yet")
+                if path:
+                    self.clip_saved.emit(str(path))
         if "snapshot" in reqs:
-            path = config.DATA_DIR / "snapshots" / f"snap_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
-            cv2.imwrite(str(path), frame)
-            self.message.emit(f"Snapshot saved: {path.name}")
+            if frame is None:
+                self._req.add('snapshot')
+            else:
+                path = config.DATA_DIR / "snapshots" / f"snap_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+                cv2.imwrite(str(path), frame)
+                self.message.emit(f"Snapshot saved: {path.name}")

@@ -4,6 +4,23 @@ Status: proposed next work after the approved six-issue repair. No new model wei
 
 ## Recommendation
 
+### Owner recording checklist (Oct 9 follow-up)
+
+**Record video as the primary material.** Still photos can help posture/identity, but they cannot show the order of movements. We can extract posture images from the recordings later. Use Bantay's Record clip with the intended monitoring camera, camera position and normal resolution; it saves clean footage without the app overlay. Keep the camera fixed during each take, with head, paws and whole body visible where possible.
+
+- Start with 10–20-second clips containing a clearly visible 5–10-second action interval. Leave a few seconds before/after a transition. Do not force the dog to hold an uncomfortable pose.
+- Record sitting, lying awake, standing, walking, licking, scratching and safe chewing/eating. Include ordinary toy chewing and calm/no-dog scenes. Label sleeping only when observable; otherwise use resting/lying.
+- For a first collection session, aim for 3–5 independent takes per core behavior across available dogs. This is a pilot for annotation and diagnosis, not enough to claim a trained/generalized model. Expand toward the independent-episode targets below once gaps are clear.
+- Vary side/front views, distance, lighting and sessions. Do not rotate the camera continuously during a take; record different views as separate takes. Use the deployment view for the majority of clips.
+- After Stop recording, fill in the new labeling form: dog name(s), behavior and notes/times. For existing or locally copied phone videos, use Menu → Label a recorded clip. Labels are saved beside each video as `<video filename>.labels.json`; these are clip summaries, not machine-parsed interval annotations yet. Include the session and exact start/end seconds in notes, including uncertainty and overlapping behaviors such as lying + chewing. Example: `clip.mp4; Oreo; evening-01; sitting 2–8 s; standing 8–11 s; walking 11–15 s`.
+- Reserve entire fresh sessions for validation/test; never split adjacent frames from the same take between training and testing. Grouped splitting supports keeping related samples together ([scikit-learn documentation](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupShuffleSplit.html)).
+
+Recording does not automatically train Bantay. The next steps are annotation, feature/model training, validation and deploying a versioned model. Keep clips and learned arrays backed up locally: `data/` and `models/` are gitignored, so pushing the code to GitHub does not back them up.
+
+High-level path: **stabilize capture/motion → label representative videos → measure a baseline → train and compare → validate live operation → release with rollback**. For the app, include startup/device diagnostics, camera reconnect, save/reload, clear unknown/error states, voice/DND behavior, bounded memory/queues and a 30-minute soak check. Keep perception uncertainty visible instead of translating every weak signal into a confident behavior.
+
+### Model direction
+
 Keep the working dog/hazard detectors initially. Fix measurement and build a labeled video evaluation set before buying accuracy with a larger model. Use the existing CLIP encoder as a frozen feature extractor, then compare a small supervised classifier and a small temporal classifier on the same held-out sessions. Separate posture, movement and mouth activity: a dog can lie down AND chew.
 
 The six repaired software defects do not make the underlying behavior model accurate. The current system classifies individual pictures and averages their scores; it does not learn the order of movements. Voice teaching currently stores six embeddings, not a video, not six independent episodes, and not new model weights.

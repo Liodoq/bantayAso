@@ -132,6 +132,7 @@ class MainWindow(QMainWindow):
         self.worker.event.connect(self.on_event)
         self.worker.ready.connect(self.on_ready)
         self.worker.teaching.connect(self.on_teaching)
+        self.worker.clip_saved.connect(self.label_recorded_clip)
         self.heard.connect(self.on_heard)
         self.answered.connect(self.on_answered)
         self.mic_state.connect(self.on_mic_state)
@@ -216,7 +217,7 @@ class MainWindow(QMainWindow):
 
         self.btn_rec = QPushButton("Record clip", objectName="pill", checkable=True)
         self.btn_rec.setToolTip("Record a video of the camera to data\\clips (no boxes drawn).\n"
-                                "Use it to keep proof of what happened or to make test clips.")
+                                "After stopping, add the dog name, behavior and notes.")
         self.btn_rec.clicked.connect(lambda: self.worker.request("record"))
         top.addWidget(self.btn_rec)
 
@@ -243,6 +244,7 @@ class MainWindow(QMainWindow):
         self.btn_more.setProperty("menu", True)
         mm = self._round_menu(QMenu(self))
         self.act_theme = mm.addAction("Light mode" if T.NAME == "dark" else "Dark mode", self.toggle_theme)
+        mm.addAction('Label a recorded clip...', self.choose_clip_to_label)
         mm.addAction("Minimize to tray", self.hide_to_tray)
         mm.addAction("Show technical info\tF12", self.toggle_debug)
         mm.addSeparator()
@@ -774,6 +776,33 @@ class MainWindow(QMainWindow):
         f.addRow(lbl("Ask Bantay", "muted"), self.set_hf_cb)
         v.addWidget(c)
 
+        # --- how Bantay talks
+        from ..persona import StyleProfile
+        sty = StyleProfile(config.DATA_DIR / "style.json")
+        c4 = card()
+        c4.setMaximumWidth(860)
+        f4 = QFormLayout(c4)
+        f4.setContentsMargins(18, 16, 18, 16)
+        f4.addRow(lbl("HOW BANTAY TALKS", "h3"))
+        self.talk_combos = {}
+        for key, label, opts in (("lang", "Language", [("auto", "Auto (match how I talk)"), ("en", "English"),
+                                                        ("tl", "Tagalog"), ("taglish", "Taglish")]),
+                                 ("length", "Answers", [("auto", "Auto (match how I talk)"), ("short", "Short"),
+                                                        ("detailed", "Detailed")]),
+                                 ("tone", "Tone", [("auto", "Auto (match how I talk)"), ("casual", "Casual"),
+                                                   ("formal", "Formal (with po)")])):
+            cb = QComboBox()
+            self._style_combo(cb)
+            for val, text in opts:
+                cb.addItem(text, val)
+            cb.setCurrentIndex(max(0, cb.findData(getattr(sty, key))))
+            f4.addRow(lbl(label, "muted"), cb)
+            self.talk_combos[key] = cb
+        self.talk_learned = lbl(f"Right now: {sty.describe()}. You can also say \"Bantay, keep it short\", "
+                                f"\"speak Tagalog\", \"more details\" or \"be formal\".", "faint", wrap=True)
+        f4.addRow("", self.talk_learned)
+        v.addWidget(c4)
+
         # --- look
         c3 = card()
         c3.setMaximumWidth(860)
@@ -911,6 +940,30 @@ class MainWindow(QMainWindow):
         self.refresh_recent()
         self.refresh_dogs()
         self.scan_cameras()
+
+    def choose_clip_to_label(self):
+        path, _ = QFileDialog.getOpenFileName(self, 'Choose a recording', str(config.DATA_DIR / 'clips'),
+                                             'Videos (*.mp4 *.avi *.mov *.mkv)')
+        if path:
+            self.label_recorded_clip(path)
+
+    def label_recorded_clip(self, path):
+        from .clip_labels import ClipLabelDialog
+        from PySide6.QtWidgets import QDialog
+        pipe = self.worker.pipe
+        names = list(pipe.registry.dogs) if pipe and pipe.registry else []
+        actions = pipe.classifier.labels if pipe and pipe.classifier else config.load().get('actions', [])
+        try:
+            dialog = ClipLabelDialog(path, names, actions, self)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, 'Cannot open clip labels', str(exc))
+            return
+        self.btn_rec.setChecked(self.worker.recording)
+        self.btn_rec.setText('Stop recording' if self.worker.recording else 'Record clip')
+        if dialog.exec() == QDialog.Accepted:
+            self.subtitle.setText(f'Labels saved for {Path(path).name}')
+        else:
+            self.subtitle.setText(f'Video kept: {Path(path).name}. Add labels later from Menu.')
 
     def on_message(self, msg: str):
         if msg == "CAMERA_LOST":
@@ -1583,6 +1636,13 @@ class MainWindow(QMainWindow):
         cfg.setdefault("ui", {})["theme"] = T.NAME
         config.save(cfg)
         pipe = self.worker.pipe
+        from ..persona import StyleProfile
+        sty = pipe.persona.style if pipe and getattr(pipe, "persona", None) else StyleProfile(config.DATA_DIR / "style.json")
+        for key, cb in self.talk_combos.items():
+            setattr(sty, key, cb.currentData())
+        sty.save()
+        self.talk_learned.setText(f"Right now: {sty.describe()}. You can also say \"Bantay, keep it short\", "
+                                  f"\"speak Tagalog\", \"more details\" or \"be formal\".")
         if pipe:
             pipe.speak_vlm, pipe.toasts, pipe.owner_clip = al["speak_vlm"], al["toast"], al["owner_voice_clip"]
             pipe.show_hazards = self.set_hz_cb.isChecked()

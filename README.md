@@ -14,6 +14,8 @@ python -m bantayaso --source http://<phone-ip>:8080/video   # phone as a wireles
 ```
 Desktop app pages: Monitor · Events · Dogs · Zones · Things · Settings. **F2** = ask Bantay by voice, **F12** = technical info on the video. Top bar: ● Record clip, 🎙 Bantay ▾ (ask, hands-free, voice, do not disturb, snooze), ☰ (light/dark mode, tray, quit). Closing the window keeps it running in the tray (right-click the paw icon → Quit).
 
+**Label recordings (desktop):** Record clip → Stop recording → enter dog name(s), behavior and optional notes/timestamps → Save labels. Skip for now keeps the video. Use Menu → Label a recorded clip to label or edit older videos, including phone videos copied locally. Labels are saved beside the video as `.mp4.labels.json`; no upload or automatic training occurs.
+
 OpenCV window keys: **R** record · **C** save last 10 s · **S** snapshot · **Z** zones · **H** object boxes · **M** mute · **N** do not disturb · **D** debug · **Q** quit
 
 Tests (no camera/GPU): `python scripts\test_risk.py` · `python scripts\test_qa.py` · Measure a clip: `python scripts\calibrate_actions.py <clip.mp4>`

@@ -83,6 +83,8 @@ class Pipeline:
             self.registry = DogRegistry(config.DATA_DIR / "dogs", threshold=nm.get("threshold", 0.80),
                                         margin=nm.get("margin", 0.02))
         self.history = ActivityHistory(10)
+        from .persona import Persona
+        self.persona = Persona(config.DATA_DIR, llm_call=self._chat)
         qa = cfg.get("qa", {})
         self.qa_model = qa.get("model", "qwen2.5:1.5b")
         self.ollama_url = cfg["models"].get("ollama_url", "http://localhost:11434")
@@ -372,11 +374,15 @@ class Pipeline:
 
     # ------------------------------------------------------------------ Ask Bantay
     def ask(self, question: str, speak: bool = True) -> str:
-        from .qa import answer
+        from .qa import answer, guard
         if self.listener is not None and self.registry is not None:     # dog names help Whisper spell
             self.listener.vocab = ["Bantay", "BantayAso", *self.registry.dogs.keys()]
         try:
-            text = answer(question, self)
+            text = self.persona.style.command(question)          # "keep it short", "speak Tagalog"...
+            if text is None:
+                self.persona.style.observe(question)            # learn language / length / formality
+                text = answer(question, self)
+                text = self.persona.finish(question, text, guard)
         except Exception as e:                     # pragma: no cover
             text = "Sorry, I couldn't work that out."
             self.log(f"[BantayAso] Q&A error: {e}")
@@ -385,28 +391,35 @@ class Pipeline:
             self.speaker.say(text, urgent=True)
         return text
 
-    def ask_llm(self, question: str, facts: str) -> str | None:
-        """Phrase an open question with a small local LLM, using ONLY the given facts."""
+    def _chat(self, messages: list, schema: dict | None, max_tokens: int) -> str | None:
+        """One local Ollama chat call (structured JSON output when supported)."""
         try:
             import requests
-            prompt = ("You are Bantay, a home pet-camera assistant. You ONLY answer questions about the "
-                      "owner's dogs as seen by the camera, using ONLY the facts below.\n"
-                      "Rules:\n"
-                      "- If the question is not about the dogs (for example code, homework, news, math, "
-                      "other topics), reply exactly: OUT_OF_SCOPE\n"
-                      "- If the facts do not contain the answer, reply exactly: UNKNOWN\n"
-                      "- Otherwise answer in one or two short, friendly sentences. Never invent objects, "
-                      "times or numbers that are not in the facts. No medical advice; suggest a vet for "
-                      "health worries.\n"
-                      f"Facts: {facts}\nQuestion: {question}\nAnswer:")
-            r = requests.post(self.ollama_url.rstrip("/") + "/api/generate", timeout=20,
-                              json={"model": self.qa_model, "prompt": prompt, "stream": False,
-                                    "keep_alive": "30m", "options": {"temperature": 0.2, "num_predict": 80}})
+            body = {"model": self.qa_model, "messages": messages, "stream": False, "keep_alive": "30m",
+                    "options": {"temperature": 0.1, "num_predict": max_tokens, "num_ctx": 2048}}
+            if schema:
+                body["format"] = schema
+            r = requests.post(self.ollama_url.rstrip("/") + "/api/chat", json=body, timeout=20)
+            if r.status_code >= 400 and schema:          # older Ollama: no schema support -> plain JSON mode
+                body["format"] = "json"
+                r = requests.post(self.ollama_url.rstrip("/") + "/api/chat", json=body, timeout=20)
             r.raise_for_status()
-            return (r.json().get("response") or "").strip().split("\n")[0] or None
+            return ((r.json().get("message") or {}).get("content") or "").strip() or None
         except Exception as e:
-            self.log(f"[BantayAso] local LLM unavailable for Q&A ({e.__class__.__name__}); using the summary")
+            self.log(f"[BantayAso] local LLM unavailable ({e.__class__.__name__}); using templates")
             return None
+
+    def ask_llm(self, question: str, facts: str) -> str | None:
+        """Open question -> grounded, style-aware answer. Returns text, 'OUT_OF_SCOPE', 'UNKNOWN' or None."""
+        res = self.persona.ask_llm(question, facts)
+        if res is None:
+            return None
+        status, ans = res
+        if status == "out_of_scope":
+            return "OUT_OF_SCOPE"
+        if status == "unknown" or not ans:
+            return "UNKNOWN"
+        return ans
 
     # ------------------------------------------------------------------
     def _fire(self, a, frame, dogs) -> None:
