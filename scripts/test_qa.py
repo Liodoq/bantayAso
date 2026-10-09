@@ -103,5 +103,23 @@ check("normal question is kept", not looks_hallucinated("Bantay, what is Oreo do
 a = answer("Bantay", pipe)
 check("wake word alone -> prompt", a.startswith("Yes?"), a)
 
+# teaching by voice
+taught = []
+pipe.classifier = types.SimpleNamespace(labels=["sitting", "lying down", "licking itself", "sleeping"],
+                                        teach=lambda tid, lab: taught.append((tid, lab)))
+pipe._actions = {1: None, 2: None}
+a = answer("Bantay, Choco is sitting right now", pipe)
+check("'Choco is sitting right now' teaches Choco=sitting", taught == [(1, "sitting")] and "remember" in a, a)
+a = answer("Bantay, remember she is lying down", pipe)
+check("'remember she is lying down' with 2 dogs and a known subject", "lying down" in a or "name" in a, a)
+taught.clear()
+a = answer("Bantay, is Choco sitting?", pipe)
+check("a question does not teach", not taught, a)
+a = answer("Bantay, Choco is sitting", pipe)
+check("plain statement without 'now'/cue does not teach", not taught, a)
+pipe._actions = {1: None}
+a = answer("Bantay, that's licking", pipe)
+check("one dog on camera: 'that's licking' teaches it", taught and taught[-1] == (1, "licking itself"), a)
+
 print("ALL PASS" if fails == 0 else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

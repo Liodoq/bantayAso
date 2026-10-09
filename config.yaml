@@ -79,3 +79,41 @@ qa:
   hands_free: false
 ui:
   theme: light
+behaviors:
+  chewing:
+    level: 2
+    seconds: 5
+  long_chewing:
+    level: 3
+    seconds: 15
+  nose_down:
+    level: 2
+    seconds: 6
+  rough_play:
+    level: 2
+    seconds: 3
+  fighting:
+    level: 2
+    seconds: 5
+  digging:
+    level: 2
+  scratching furniture:
+    level: 2
+  jumping on furniture:
+    level: 0
+  sniffing the floor:
+    level: 1
+  licking itself:
+    level: 1
+  scratching itself:
+    level: 0
+  walking:
+    level: 0
+  standing:
+    level: 0
+  sitting:
+    level: 0
+  lying down:
+    level: 0
+  sleeping:
+    level: 0
