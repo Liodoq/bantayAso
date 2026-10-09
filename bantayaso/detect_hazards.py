@@ -43,11 +43,35 @@ class HazardDetector:
         os.chdir(self.weights.parent)            # text encoder is cached next to the weights
         try:
             if "yoloe" in self.weights.name:
-                self.model.set_classes(self.names, self.model.get_text_pe(self.names))
+                self.model.set_classes(self.names, self._text_pe())
             else:
                 self.model.set_classes(self.names)
         finally:
             os.chdir(cwd)
+
+    def _text_pe(self):
+        """Text embeddings for the object words, cached on disk per word list: computing them needs
+        a separate text model that takes seconds to load, but the list rarely changes."""
+        import hashlib
+        import torch
+        key = hashlib.sha1(("|".join(self.names) + self.weights.name).encode()).hexdigest()[:16]
+        path = self.weights.parent / f"yoloe_text_{key}.pt"
+        if path.exists():
+            try:
+                pe = torch.load(path, map_location="cpu")
+                try:                              # same device the model is on (as get_text_pe returns)
+                    pe = pe.to(next(self.model.model.parameters()).device)
+                except Exception:
+                    pass
+                return pe
+            except Exception:
+                pass
+        pe = self.model.get_text_pe(self.names)
+        try:
+            torch.save(pe.detach().cpu() if hasattr(pe, "detach") else pe, path)
+        except Exception:
+            pass
+        return pe
 
     def update_vocab(self, vocab: dict) -> None:
         """Change the object list live (Things page). Runs on the pipeline thread."""

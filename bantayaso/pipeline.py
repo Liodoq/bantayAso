@@ -52,27 +52,45 @@ class Pipeline:
             _ULOG.setLevel(logging.ERROR)
         except Exception:
             pass
+        # The three vision models load at the same time (each spends most of its time reading files
+        # and setting up the GPU), which is much faster than one after another.
+        import time as _t
+        from concurrent.futures import ThreadPoolExecutor
         from .detect_dog import DogDetector
-        log("[BantayAso] loading dog detector...")
-        self.dog_det = DogDetector(config.MODELS_DIR / cfg["models"]["dog_detector"], device=self.device,
-                                   conf=det.get("dog_conf", 0.25), imgsz=det.get("imgsz", 960),
-                                   aliases=det.get("dog_aliases", True), alias_conf=det.get("alias_conf", 0.30),
-                                   enhance=det.get("enhance_dark", True))
-        self.hazard_det = None
-        if use_hazards:
+        try:
+            import ultralytics  # noqa: F401  (import once here, not from two threads at once)
+        except ImportError:
+            pass
+        t0 = _t.monotonic()
+
+        def timed(name, fn):
+            s = _t.monotonic()
+            obj = fn()
+            log(f"[BantayAso] {name} ready ({_t.monotonic() - s:.1f} s)")
+            return obj
+
+        def load_hazards():
             from .detect_hazards import HazardDetector
-            log("[BantayAso] loading hazard detector...")
-            self.hazard_det = HazardDetector(config.MODELS_DIR / cfg["models"]["hazard_detector"],
-                                             cfg.get("hazards", {}), device=self.device,
-                                             conf=det.get("hazard_conf", 0.25),
-                                             imgsz=det.get("hazard_imgsz", 640))
-        self.classifier = None
-        if use_actions:
+            return HazardDetector(config.MODELS_DIR / cfg["models"]["hazard_detector"],
+                                  cfg.get("hazards", {}), device=self.device,
+                                  conf=det.get("hazard_conf", 0.25), imgsz=det.get("hazard_imgsz", 640))
+
+        def load_actions():
             from .actions import ActionClassifier
-            log("[BantayAso] loading action model (CLIP)...")
-            self.classifier = ActionClassifier(cfg.get("actions") or [], config.MODELS_DIR,
-                                               device=self.device,
-                                               model_name=cfg["models"].get("clip_openai_name", "ViT-B/32"))
+            return ActionClassifier(cfg.get("actions") or [], config.MODELS_DIR, device=self.device,
+                                    model_name=cfg["models"].get("clip_openai_name", "ViT-B/32"))
+        log("[BantayAso] loading the vision models...")
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="load") as pool:
+            f_hz = pool.submit(timed, "object detector", load_hazards) if use_hazards else None
+            f_act = pool.submit(timed, "action model (CLIP)", load_actions) if use_actions else None
+            self.dog_det = timed("dog detector", lambda: DogDetector(
+                config.MODELS_DIR / cfg["models"]["dog_detector"], device=self.device,
+                conf=det.get("dog_conf", 0.25), imgsz=det.get("imgsz", 960),
+                aliases=det.get("dog_aliases", True), alias_conf=det.get("alias_conf", 0.30),
+                enhance=det.get("enhance_dark", True)))
+            self.hazard_det = f_hz.result() if f_hz else None
+            self.classifier = f_act.result() if f_act else None
+        log(f"[BantayAso] vision models loaded in {_t.monotonic() - t0:.1f} s")
         self.vlm = None
         if use_vlm and al.get("vlm", True):
             from .vlm import VLMWorker
@@ -116,7 +134,12 @@ class Pipeline:
                 # dog names are matched by sound after transcription ("Patchouchai" -> "Pachuchay")
                 self.listener.names_fn = lambda: list(self.registry.dogs.keys()) if self.registry else []
                 import threading as _th
-                _th.Thread(target=lambda: self.listener and self.listener._load(), daemon=True).start()
+
+                def _later():                    # load speech after the camera AI is running (it is also
+                    _t.sleep(8)                  # loaded on demand if you press F2 sooner)
+                    if self.listener:
+                        self.listener._load()
+                _th.Thread(target=_later, daemon=True).start()
             except Exception as e:                # pragma: no cover
                 log(f"[BantayAso] voice questions unavailable: {e}")
         self.motion = MotionMeter()

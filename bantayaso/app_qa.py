@@ -19,8 +19,92 @@ def event_page(pipe,rows,start=0):
     return ' '.join(lines)
 
 
+LEVEL_WORD = {0: 'Safe', 1: 'Watch', 2: 'Warning', 3: 'Danger'}
+
+
+def dogs_roster(pipe, only=None):
+    """Who the dogs are: registered names, who is on camera now, what each is doing and where."""
+    reg = getattr(pipe, 'registry', None)
+    known = list(getattr(reg, 'dogs', {}) or {})
+    names = dict(getattr(reg, 'names_by_tid', {}) or {})
+    st = pipe.state
+    seen, unnamed = [], 0
+    for a in getattr(st, 'assessments', []) or []:
+        who = names.get(a.track_id)
+        doing = a.reason.split(' - ')[0]
+        where = f' on {a.zone}' if getattr(a, 'zone', None) else ''
+        if who:
+            seen.append((who, f'{who} is {doing}{where}'))
+        else:
+            unnamed += 1
+            seen.append((None, f'an unnamed dog is {doing}{where}'))
+    if only:
+        line = next((s for w, s in seen if w == only), None)
+        if line:
+            return line[0].upper() + line[1:] + '.'
+        return f"{only} is one of your registered dogs, but I don't see {only} on camera right now." \
+            if only in known else f"I don't have a dog named {only}. Registered dogs: {', '.join(known) or 'none yet'}."
+    parts = []
+    if known:
+        parts.append(f"You have {len(known)} registered dog{'s' if len(known) != 1 else ''}: {', '.join(known)}.")
+    else:
+        parts.append('No dogs are named yet. Add them on the Dogs page.')
+    if seen:
+        parts.append('On camera now: ' + '; '.join(s for _, s in seen) + '.')
+        away = [k for k in known if k not in {w for w, _ in seen}]
+        if away:
+            parts.append(f"Not in view: {', '.join(away)}.")
+    else:
+        parts.append("I don't see any dog on camera right now.")
+    if unnamed and known:
+        parts.append('An unnamed dog may be one I have not recognised yet; adding more photos on the Dogs page helps.')
+    return ' '.join(parts)
+
+
+def behaviours_answer(pipe, q):
+    from .risk import BEHAVIORS
+    eng = getattr(pipe, 'engine', None)
+    beh = getattr(eng, 'beh', None) or {k: (v[1], v[2]) for k, v in BEHAVIORS.items()}
+    hit = next((k for k, (name, *_r) in BEHAVIORS.items()
+                if re.search(r'\b' + re.escape(name.lower().split()[0]) + r'\w*', q)), None)
+    def line(k):
+        lvl, sec = beh.get(k, (BEHAVIORS[k][1], BEHAVIORS[k][2]))
+        return f"{BEHAVIORS[k][0]}: {LEVEL_WORD.get(lvl, lvl)}" + (f' after {int(sec)} seconds' if sec else '')
+    if hit and not re.search(r'all|list|settings|page', q):
+        return line(hit) + '. You can change it on the Behaviours page.'
+    alerting = [line(k) for k in BEHAVIORS if beh.get(k, (0,))[0] >= 2]
+    watch = [BEHAVIORS[k][0] for k in BEHAVIORS if beh.get(k, (0,))[0] == 1]
+    return ('Alerts: ' + '; '.join(alerting) + '.' + (f" Watch only: {', '.join(watch)}." if watch else '')
+            + ' Everything else counts as safe. Change these on the Behaviours page.')
+
+
 def app_answer(question,pipe):
     q=question.lower()
+    reg_names=list(getattr(getattr(pipe,'registry',None),'dogs',{}) or {})
+    # who the dogs are ("Who are the dogs?", "Who do you see?", "Do you know my dogs?", "Sino sila?")
+    if re.search(r"who (are|r) (the|my|your|these|those)?\s*dogs|who('s| is) (there|here|on camera|in view)|who do you see|"
+                 r"(names? of|name) (the|my) dogs|what are (the|my) dogs'? names|do you know (my|the) dogs|"
+                 r"how many dogs do i have|which dogs (do i have|are registered)|\bsino (sila|ang mga aso)|kilala mo",q):
+        return dogs_roster(pipe)
+    m=re.search(r"(who is|tell me about|do you know)\s+(\w+)",q)
+    if m:
+        name=next((n for n in reg_names if n.lower()==m.group(2)),None)
+        if name: return dogs_roster(pipe, only=name)
+    # Behaviours page ("What are the behaviour settings?", "How dangerous is digging?")
+    if re.search(r"behaviou?rs?( page| settings| levels)?\b|how (dangerous|serious|bad) is (digging|chewing|fighting|jumping|scratching|sniffing|licking|rough)|"
+                 r"what level is (digging|chewing|fighting|jumping|scratching|sniffing|licking)",q):
+        return behaviours_answer(pipe, q)
+    # one object's danger level ("Is a battery dangerous?" / "How dangerous is a slipper?")
+    vocab=getattr(getattr(pipe,'hazard_det',None),'vocab',None) or getattr(pipe,'cfg',{}).get('hazards',{}) or {}
+    obj=next((w for w in sorted(vocab,key=len,reverse=True) if re.search(r'\b'+re.escape(w.lower())+r's?\b',q)),None)
+    if obj and re.search(r'dangerous|danger level|how (risky|bad)|is .* (safe|harmful|risky)|tier',q):
+        t=int(vocab[obj]); word={0:'ignored (a look-alike)',1:'low risk',2:'medium risk',3:'high danger'}.get(t,'configured')
+        lead=({0:'No. ',1:'Only a little. ',2:'Yes. ',3:'Yes. '}.get(t,'') if re.match(r'(is|are)\b',q) else '')
+        return f"{lead}{obj[0].upper()+obj[1:]} is set as {word} on the Things page."
+    # camera source
+    if re.search(r'which camera|what camera|camera (source|name)',q):
+        cam=getattr(pipe,'cfg',{}).get('camera',{})
+        return f"I'm using USB camera {cam.get('index',0)} at {cam.get('width',1280)} by {cam.get('height',720)}. Change it in Settings."
     if re.search(r"(last|latest) (alert|warning|danger)\b",q):
         return None
     if re.search(r'(read|tell|dictate|list|show|what|any|have).*(events?|alerts?|warnings?)|recent events|event log',q):
@@ -71,5 +155,6 @@ def app_answer(question,pipe):
         snapshots=sum(1 for p in (DATA_DIR/'snapshots').glob('*.jpg'))
         return f'The app has {clips} saved video clips and {snapshots} snapshots. Recording labels do not automatically train the model.'
     if re.search(r'whole app|application|app status|what can you (access|read)',q):
-        return 'I can read the camera observations, dog locations, recent activities, saved events, registered dogs, drawn areas, Things list and voice settings. What would you like?'
+        return ('I can read the camera view, who the dogs are and what each is doing, recent activity, saved events, '
+                'drawn areas, the Things list, the Behaviours levels, the camera and voice settings, and saved clips. What would you like?')
     return None

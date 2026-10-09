@@ -55,14 +55,41 @@ class Worker(QThread):
                                height=cam.get("height", 720), fps=cam.get("fps", 30)).start()
         src = open_src(source)
         self.message.emit("Loading the local AI models...")
-        try:
-            self.pipe = Pipeline(cfg, use_hazards=not self.args.no_hazards,
-                                 use_actions=not self.args.no_actions, use_vlm=not self.args.no_vlm,
-                                 log=lambda m: (print(m), self.message.emit(m)))
-        except Exception as e:                  # pragma: no cover
-            self.message.emit(f"Could not load the AI models: {e}")
+        # Load the models on a helper thread and show the live camera meanwhile, so the window is
+        # useful within a second instead of a blank panel until every model is ready.
+        import threading
+        box = {}
+
+        def build():
+            try:
+                box["pipe"] = Pipeline(cfg, use_hazards=not self.args.no_hazards,
+                                       use_actions=not self.args.no_actions, use_vlm=not self.args.no_vlm,
+                                       log=lambda m: (print(m), self.message.emit(m)))
+            except Exception as e:              # pragma: no cover
+                box["error"] = e
+        loader = threading.Thread(target=build, name="model-loader", daemon=True)
+        t_load = time.monotonic()
+        loader.start()
+        last_id = 0
+        while loader.is_alive() and self.running:
+            fid, frame = src.read()
+            if frame is None or fid == last_id:
+                self.msleep(15)
+                continue
+            last_id = fid
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w = rgb.shape[:2]
+            img = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+            self.frame_ready.emit(img, {"status": "Getting Bantay ready...", "level": 0, "dogs": 0, "fps": 0.0,
+                                        "last_alert": None, "frame_size": (w, h)})
+            self.msleep(60)                      # ~15 fps preview is plenty while loading
+        loader.join()
+        if "error" in box or "pipe" not in box:
+            self.message.emit(f"Could not load the AI models: {box.get('error')}")
             src.stop()
             return
+        self.pipe = box["pipe"]
+        print(f"[BantayAso] ready in {time.monotonic() - t_load:.1f} s")
         self.pipe.on_notice = lambda text: self.message.emit("Entry: " + text)
         self.pipe.on_event = lambda ev: self.event.emit(dict(ev))
         self.pipe.on_teaching = lambda ev: self.teaching.emit(dict(ev))

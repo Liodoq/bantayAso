@@ -81,6 +81,23 @@ p.state.boxes = [p.state.boxes[1]]
 a = answer("Bantay, is Pachuchay sleeping?", p)
 check("dog not on camera -> 'Not sure.' + why", a.startswith("Not sure.") and "don't see" in a, a)
 
+# app knowledge: who the dogs are, behaviours, things
+p = make()
+p.registry.dogs["Brownie"] = []
+p.cfg = {"hazards": {"battery": 3, "slipper": 2}, "camera": {"index": 1}}
+p.hazard_det = None
+from bantayaso.risk import RiskEngine   # noqa: E402
+p.engine = RiskEngine({"behaviors": {}})
+a = answer("Bantay, who are the dogs?", p)
+check("who are the dogs -> registered names + who is on camera", "Pachuchay" in a and "Oreo" in a and "Brownie" in a
+      and "Not in view: Brownie" in a, a)
+a = answer("Bantay, who is Brownie?", p)
+check("who is <name> (away) -> registered but not in view", "registered" in a and "don't see" in a, a)
+a = answer("Bantay, is a battery dangerous?", p)
+check("is a battery dangerous -> 'Yes.' + Things level", a.startswith("Yes.") and "high danger" in a, a)
+a = answer("Bantay, how dangerous is digging?", p)
+check("behaviour level", "Digging: Warning" in a, a)
+
 names = ["Pachuchay", "Oreo", "Brownie"]
 for heard, want in (("Bantay, is Patchouchai sleeping?", "Bantay, is Pachuchay sleeping?"),
                     ("Bantay, where is pa choo chay", "Bantay, where is Pachuchay"),
