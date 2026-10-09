@@ -235,13 +235,13 @@ bantayaso/                     # repo root = C:\Users\johnl\Desktop\projectayiks
 
 ## Build Status & Handoff
 
-**Current batch:** Batch 0 ✅ done (Oct 9, 3:22 PM): `check_env.py` reports ALL GOOD. GitHub repo (SETUP.md step 6) still to confirm.
-**Next step:** Batch 1: camera + dog detection + live view. Then record test clips of the dog.
+**Current batch:** Batch 1 ✅ done (Oct 9, 3:54 PM). Live test: **all 4 dogs boxed** (0.55–0.90, including a dog lying on the bed and a dog chewing a toy), **29.6 FPS** (capped by the 30 fps camera), **21 ms detection** on cuda with yolo11s @ 960.
+**Next step:** User records test clips with R and pushes to GitHub. Then Batch 2 (hazards + zones + risk engine v1), planned after the usage reset at ~5:20 PM.
 
 | Batch | Status | Notes |
 |---|---|---|
 | 0 Setup & skeleton | ✅ done | Files: requirements.txt, .gitignore, config.yaml, SETUP.md, README.md (stub), docs/ui-mockup.html, bantayaso/{__init__,__main__,config}.py, scripts/{check_env,find_camera,download_models}.py. All checks pass on the laptop. |
-| 1 Camera + dog detection | ⬜ | |
+| 1 Camera + dog detection | ✅ done (29.6 FPS, 21 ms, 4/4 dogs) | `capture.py` (FrameSource: threaded latest-frame, USB index or video file, auto-reconnect, file plays at real speed and loops; ClipRecorder: last 10 s JPEG ring buffer + continuous record to data/clips, 15 fps mp4v), `detect_dog.py` (YOLO11n `track()` class 16, ByteTrack, FP16 on CUDA, conf 0.35, imgsz 640, warm-up), `overlay.py` (palette colors in BGR, labels, status pill, REC dot, toast, hidden debug), `__main__.py` (OpenCV window; keys R record, C save last 10 s, S snapshot, D debug, Q quit; `--source`, `--no-detect`, `--debug`). Capture + recorder smoke-tested in the cloud with a synthetic video; YOLO path not run there. |
 | 2 Hazards + zones + risk v1 | ⬜ | |
 | 3 Actions + motion | ⬜ | |
 | 4 Alerts + events | ⬜ | |
@@ -252,6 +252,8 @@ bantayaso/                     # repo root = C:\Users\johnl\Desktop\projectayiks
 ### Decisions Log
 - 2026-10-09: Idea chosen: local AI dog watcher. Desktop-first; phone app is roadmap only; a LAN phone view is a stretch.
 - 2026-10-09: The action camera is the CCTV; the real dog is at Demo Day; the laptop has a GPU.
+- 2026-10-09: First live test (3:46 PM): works, but only 1 of 3 dogs was detected (0.42 conf; a sitting dog and a close, partly visible dog were missed) and track IDs churned (#369). Fix: dog detector yolo11n → **yolo11s**, `detect.dog_conf` 0.35 → 0.25, `detect.imgsz` 640 → 960, custom tracker `bantayaso/trackers/dogs.yaml` (track_buffer 90, lower thresholds), track ID removed from labels. The user has several dogs, so detection must handle multiple dogs (individual identity is still out of scope).
+- 2026-10-09: Batch 1 uses an OpenCV window for the live view (the PySide6 UI comes in Batch 6). Recorded clips are clean frames (no overlays) so they can be reused as test input. Optional config keys read with defaults: `detect.dog_conf`, `detect.imgsz`, `capture.buffer_seconds`, `capture.record_fps`.
 - 2026-10-09: CLIP now loads through the OpenAI `clip` package (`clip_source: openai-clip`, ViT-B/32, weights in `models/clip`, downloaded from OpenAI's CDN) because Hugging Face downloads stalled. open_clip stays as an option. Batch 3 `actions.py` must use `clip.load(name, download_root=models/clip)`.
 - 2026-10-09: User rule: no hardcoded spec/status narration on screen (removed offline/GPU/saved-locally cards, FPS chips, resolution subtitle). FPS/device only in an optional debug overlay.
 - 2026-10-09: UI direction set: brown/black dark theme, mockup saved at `docs/ui-mockup.html` (Monitor + Events screens). PySide6 + QSS must match it in Batch 6. "Choco" in the mockup is a placeholder dog name (configurable `dog_name`).
@@ -260,6 +262,7 @@ bantayaso/                     # repo root = C:\Users\johnl\Desktop\projectayiks
 - 2026-10-09: Use a layered pipeline (YOLO11 → YOLOE/YOLO-World → CLIP zero-shot → rules → Ollama VLM). No custom training required; a dog-pose fine-tune is optional.
 
 ### Known Issues / Risks
+- Overlapping dogs: labels can cover each other (one dog's label was hidden under another's). Fix label placement when the overlay is reworked (Batch 2/6).
 - `config.save()` (yaml.safe_dump) strips comments from config.yaml. This is harmless; keep the device copy as the source of truth.
 - Windows PATH gotcha: refreshing `$env:Path` drops the venv, so re-run `.\.venv\Scripts\Activate.ps1`. Ollama lives at `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`.
 - Setup (Oct 9, 3:08 PM): the Hugging Face CLIP download crawled at about 16 kB/s through the `hf_xet` downloader, while GitHub downloads ran at about 7 MB/s. Fix: `$env:HF_HUB_DISABLE_XET="1"` (or `pip uninstall hf_xet -y`) and rerun `download_models.py`. YOLO11n, YOLOE and the MobileCLIP text encoder were already downloaded; `clip` was auto-installed by Ultralytics.
@@ -268,7 +271,7 @@ bantayaso/                     # repo root = C:\Users\johnl\Desktop\projectayiks
 - The venue's lighting and background differ from home. Re-check thresholds on site during the 12:15 PM AV check.
 
 ### Environment Facts (fill in during Batch 0)
-- Laptop: ASUS TUF A15 (AMD Ryzen), 16 GB RAM, Windows 10/11 (Python reports Windows 10) · GPU: NVIDIA GeForce RTX 3050 Laptop, **4.0 GB VRAM**, CUDA 12.4 · Python 3.11.9 in `.venv` · torch 2.6.0+cu124 · opencv 5.0.0 · ultralytics 8.4.174 · open_clip 3.3.0 · PySide6 6.12.0 · Ollama models: `moondream:latest`, `qwen2.5vl:3b` · TTS: 2 SAPI voices (Microsoft David default) · **Camera: index 1, backend msmf**, delivers 1920x1080 by default (config asks for 1280x720) · Weights: models/yolo11n.pt, models/yoloe-11s-seg.pt, models/clip/ViT-B-32.pt · Measured FPS: — (Batch 1)
+- Laptop: ASUS TUF A15 (AMD Ryzen), 16 GB RAM, Windows 10/11 (Python reports Windows 10) · GPU: NVIDIA GeForce RTX 3050 Laptop, **4.0 GB VRAM**, CUDA 12.4 · Python 3.11.9 in `.venv` · torch 2.6.0+cu124 · opencv 5.0.0 · ultralytics 8.4.174 · open_clip 3.3.0 · PySide6 6.12.0 · Ollama models: `moondream:latest`, `qwen2.5vl:3b` · TTS: 2 SAPI voices (Microsoft David default) · **Camera: index 1, backend msmf**, delivers 1920x1080 by default (config asks for 1280x720) · Weights: models/yolo11n.pt, models/yoloe-11s-seg.pt, models/clip/ViT-B-32.pt · Measured: **29.6 FPS live, 21 ms per detection** (yolo11s, imgsz 960, FP16)
 
 ### How to resume (for any AI agent)
 1. Read this whole file. Respect the deadline and the "no fake benchmarks" rule.

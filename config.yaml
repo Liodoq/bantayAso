@@ -7,7 +7,7 @@ camera:
   fps: 30
 models:
   device: auto
-  dog_detector: yolo11n.pt
+  dog_detector: yolo11s.pt
   hazard_detector: yoloe-11s-seg.pt
   clip_source: openai-clip
   clip_openai_name: ViT-B/32
@@ -53,3 +53,6 @@ alerts:
   voice: true
   do_not_disturb: false
   owner_voice_clip: ''
+detect:
+  dog_conf: 0.25
+  imgsz: 960

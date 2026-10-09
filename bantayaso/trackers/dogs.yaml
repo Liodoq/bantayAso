@@ -1,0 +1,8 @@
+# ByteTrack tuned for dogs: keep IDs through short misses (lying down, partly hidden).
+tracker_type: bytetrack
+track_high_thresh: 0.3
+track_low_thresh: 0.1
+new_track_thresh: 0.35
+track_buffer: 90
+match_thresh: 0.8
+fuse_score: true
