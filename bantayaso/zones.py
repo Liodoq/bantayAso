@@ -55,6 +55,8 @@ class ZoneEditor:
         self.type = "trash"
         self.pending_name = ""                  # optional custom name, e.g. "Sofa"
         self.selected = None                    # index of the zone being edited in the app (handles shown)
+        self.editing = False                    # app's Edit mode: corner handles on every zone
+        self.hover = None                       # (zone index, corner index) under the mouse
         self.size = (1280, 720)
 
     def mouse(self, event, x, y, flags, param):

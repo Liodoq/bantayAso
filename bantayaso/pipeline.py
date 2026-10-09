@@ -54,7 +54,9 @@ class Pipeline:
         from .detect_dog import DogDetector
         log("[BantayAso] loading dog detector...")
         self.dog_det = DogDetector(config.MODELS_DIR / cfg["models"]["dog_detector"], device=self.device,
-                                   conf=det.get("dog_conf", 0.25), imgsz=det.get("imgsz", 960))
+                                   conf=det.get("dog_conf", 0.25), imgsz=det.get("imgsz", 960),
+                                   aliases=det.get("dog_aliases", True), alias_conf=det.get("alias_conf", 0.30),
+                                   enhance=det.get("enhance_dark", True))
         self.hazard_det = None
         if use_hazards:
             from .detect_hazards import HazardDetector
@@ -102,6 +104,9 @@ class Pipeline:
         self.motion = MotionMeter()
         self.zones = load_zones(cfg)
         self.editor = ZoneEditor(self.zones)
+        from .zone_align import ZoneAligner
+        self.aligner = ZoneAligner(config.DATA_DIR / "zones_ref.png")   # follows a bumped/re-angled camera
+        self._last_frame = None
         self.engine = RiskEngine(cfg)
         self.events = EventLog(config.DATA_DIR / "events.db", config.DATA_DIR / "snapshots")
         self.speaker = Speaker(rate=int(al.get("voice_rate", 1)), voice=al.get("voice_name", ""))
@@ -135,10 +140,27 @@ class Pipeline:
         """Throw away unsaved zone edits: back to what config.yaml has."""
         self.zones[:] = load_zones(config.load())
 
+    def live_zones(self) -> list:
+        """Zones moved to where the furniture is now (camera bumped/re-angled since they were drawn)."""
+        if self.editor.editing or self.aligner.status not in ("moved", "lost"):
+            return self.zones
+        from .zones import Zone
+        return [Zone(z.name, z.type, self.aligner.apply(z.points)) for z in self.zones]
+
+    def bake_alignment(self) -> None:
+        """Before editing: put the zones where they are drawn now, and make this view the new reference."""
+        if self.aligner.status in ("moved", "lost"):
+            for z in self.zones:
+                z.points = self.aligner.apply(z.points)
+        if self._last_frame is not None:
+            self.aligner.set_reference(self._last_frame)
+
     def save_zones(self) -> None:
         latest = config.load()              # don't clobber edits made while running
         latest["zones"] = zones_to_cfg(self.zones)
         config.save(latest)
+        if self._last_frame is not None:                # this view is what the zones were drawn on
+            self.aligner.set_reference(self._last_frame)
 
     def _pairs(self, frame, dogs, now) -> dict:
         """Dogs whose boxes touch and are both moving get a CLIP 'fighting?' score (~3 per second)."""
@@ -243,6 +265,14 @@ class Pipeline:
 
     def process(self, frame: np.ndarray) -> tuple[np.ndarray, State]:
         st = self.state
+        self._last_frame = frame
+        if self.zones and not self.editor.editing:
+            if not self.aligner.has_reference:          # zones from before this feature: today's view is the reference
+                self.aligner.set_reference(frame)
+            prev = self.aligner.status
+            if self.aligner.update(frame) != prev and self.aligner.status in ("moved", "lost"):
+                self.log("[BantayAso] camera moved: zones shifted to match" if self.aligner.status == "moved"
+                         else "[BantayAso] camera view changed a lot: please check the zones")
         if self._pending_vocab is not None:
             v, self._pending_vocab = self._pending_vocab, None
             self.engine.vocab_tiers = {str(k): int(x) for k, x in v.items()}
@@ -296,7 +326,7 @@ class Pipeline:
         hz = self._hazards + [z for z in self._zoom if not any(z.name == x.name for x in self._hazards)]
 
         pairs = self._pairs(frame, dogs, now)
-        found = self.engine.update(dogs, hz, self.zones, (w, h), hazards_fresh=fresh,
+        found = self.engine.update(dogs, hz, self.live_zones(), (w, h), hazards_fresh=fresh,
                                    actions=self._actions if self.classifier else None, pairs=pairs)
         names = {}
         if self.registry is not None:
@@ -353,7 +383,8 @@ class Pipeline:
         overlay.reset_labels()
         self.editor.size = (w, h)
         if self.editor.active:                 # zones are only drawn while you edit them
-            overlay.draw_zones(view, self.zones, self.editor, help_bar=self.zone_help)
+            overlay.draw_zones(view, self.zones if self.editor.editing else self.live_zones(), self.editor,
+                               help_bar=self.zone_help)
         if self.show_hazards:
             overlay.draw_hazards(view, hz)
         overlay.draw_dogs(view, dogs, {a.track_id: a for a in found}, names)

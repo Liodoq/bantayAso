@@ -11,6 +11,9 @@ from . import theme as T
 class VideoView(QWidget):
     """Shows frames scaled with aspect ratio; reports clicks in FRAME coordinates."""
     clicked = Signal(int, int, int)            # x, y, button (1 left, 2 right)
+    dragged = Signal(int, int)                 # x, y while the left button is held (frame coords)
+    released = Signal(int, int)
+    hovered = Signal(int, int)                 # mouse over the picture, no button (-1, -1 = outside)
 
     def __init__(self, placeholder: str = "Starting camera...", parent=None):
         super().__init__(parent)
@@ -87,7 +90,26 @@ class VideoView(QWidget):
         return (int((pos.x() - r.x()) * self._img.width() / r.width()),
                 int((pos.y() - r.y()) * self._img.height() / r.height()))
 
+    def _clamped_pos(self, pos):
+        r = self._target()
+        x = min(max(pos.x(), r.left()), r.right())
+        y = min(max(pos.y(), r.top()), r.bottom())
+        return (int((x - r.x()) * self._img.width() / max(1, r.width())),
+                int((y - r.y()) * self._img.height() / max(1, r.height())))
+
+    def leaveEvent(self, e):
+        self.hovered.emit(-1, -1)
+        super().leaveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._img is not None and e.button() == Qt.LeftButton:
+            self.released.emit(*self._clamped_pos(e.position().toPoint()))
+
     def mouseMoveEvent(self, e):
+        if self._img is not None and e.buttons() & Qt.LeftButton:
+            self.dragged.emit(*self._clamped_pos(e.position().toPoint()))
+        elif self._img is not None:
+            self.hovered.emit(*(self._frame_pos(e.position().toPoint()) or (-1, -1)))
         if not self.selecting:
             return
         fp = self._frame_pos(e.position().toPoint())

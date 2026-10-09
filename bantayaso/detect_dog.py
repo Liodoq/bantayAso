@@ -7,6 +7,21 @@ from pathlib import Path
 import numpy as np
 
 DOG_CLASS = 16
+# A dog curled up or stretched out asleep on a light blanket is often labelled cat/sheep/cow/bear by the
+# COCO detector (it still "sees" an animal). Those classes are accepted as a dog, with a slightly
+# higher bar. Teddy bear (77) is NOT included: plush toys on the bed would become dogs.
+ALIAS_CLASSES = {15: "cat", 18: "sheep", 19: "cow", 21: "bear"}
+
+
+def enhance_dark(frame: np.ndarray, mean_below: float = 80.0) -> np.ndarray:
+    """Brighten a dim frame for detection only (CLAHE on lightness). Returns the frame unchanged if bright."""
+    import cv2
+    small = cv2.resize(frame, (64, 36))
+    if float(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).mean()) >= mean_below:
+        return frame
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    lab[..., 0] = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(lab[..., 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
 @dataclass
@@ -24,13 +39,17 @@ class Dog:
 
 class DogDetector:
     def __init__(self, weights: Path, device: str = "cuda", conf: float = 0.35, imgsz: int = 640,
-                 hold_seconds: float = 0.8, smooth: float = 0.5):
+                 hold_seconds: float = 0.8, smooth: float = 0.5, aliases: bool = True,
+                 alias_conf: float = 0.30, enhance: bool = True):
         from ultralytics import YOLO
         self.model = YOLO(str(weights))
         self.device = device
         self.conf = conf
         self.imgsz = imgsz
         self.half = device.startswith("cuda")
+        self.aliases = dict(ALIAS_CLASSES) if aliases else {}
+        self.alias_conf = alias_conf
+        self.enhance = enhance
         # anti-flicker: keep a dog that the detector missed for a moment (e.g. a white dog curled
         # up on a white blanket hovers around the confidence threshold) and smooth box jitter
         self.hold_seconds, self.smooth = hold_seconds, smooth
@@ -80,7 +99,8 @@ class DogDetector:
         return out
 
     def _detect(self, frame: np.ndarray) -> list[Dog]:
-        res = self.model.track(frame, persist=True, classes=[DOG_CLASS], conf=self.conf,
+        img = enhance_dark(frame) if self.enhance else frame
+        res = self.model.track(img, persist=True, classes=[DOG_CLASS, *self.aliases], conf=self.conf,
                                imgsz=self.imgsz, device=self.device, half=self.half,
                                tracker=str(Path(__file__).parent / "trackers" / "dogs.yaml"), verbose=False)[0]
         dogs = []
@@ -89,6 +109,9 @@ class DogDetector:
         xyxy = res.boxes.xyxy.cpu().numpy()
         confs = res.boxes.conf.cpu().numpy()
         ids = res.boxes.id.cpu().numpy().astype(int) if res.boxes.id is not None else [-1] * len(xyxy)
-        for b, c, i in zip(xyxy, confs, ids):
+        cls = res.boxes.cls.cpu().numpy().astype(int) if res.boxes.cls is not None else [DOG_CLASS] * len(xyxy)
+        for b, c, i, k in zip(xyxy, confs, ids, cls):
+            if k != DOG_CLASS and c < self.alias_conf:
+                continue                           # a weak "cat/sheep" guess is not enough
             dogs.append(Dog(int(i), tuple(int(v) for v in b), float(c)))
         return dogs

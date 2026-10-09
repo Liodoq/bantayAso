@@ -6,6 +6,7 @@ Top bar: Record clip, Bantay (ask / hands-free / voice / do-not-disturb) and Men
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -462,11 +463,11 @@ class MainWindow(QMainWindow):
         return page
 
     def _zones_page(self):
-        page, v = self._page("Zones", "Mark areas of the room so Bantay knows what is safe and what is not. "
-                                      "Food bowl and Play area make eating or chewing toys there normal.")
-        # ---- step 1: what kind of area
-        tb = QFrame(objectName="toolbar")
-        tl = QHBoxLayout(tb)
+        page, v = self._page("Zones", "Areas of the room Bantay watches. Press Edit zones to add, reshape or "
+                                      "delete them. Food bowl and Play area make eating or chewing toys there normal.")
+        # ---- area toolbar: only visible while editing
+        self.zone_toolbar = QFrame(objectName="toolbar")
+        tl = QHBoxLayout(self.zone_toolbar)
         tl.setContentsMargins(14, 10, 10, 10)
         tl.setSpacing(8)
         tl.addWidget(lbl("AREA", "h3"))
@@ -481,11 +482,9 @@ class MainWindow(QMainWindow):
         self.zone_name = QLineEdit()
         self.zone_name.setPlaceholderText("Name (optional), e.g. Sofa")
         self.zone_name.setMinimumWidth(170)
-        self.zone_name.returnPressed.connect(self.zone_finish)
         tl.addWidget(self.zone_name, 1)
-        v.addWidget(tb)
+        v.addWidget(self.zone_toolbar)
 
-        # ---- step 2: draw on the video; actions as icons (hover shows what each does)
         c = card()
         cv = QVBoxLayout(c)
         cv.setContentsMargins(14, 12, 14, 14)
@@ -496,31 +495,62 @@ class MainWindow(QMainWindow):
         self.zone_step.setStyleSheet("font-weight: 600;")
         head.addWidget(self.zone_step, 1)
         self.zone_icons = []
-        for key, tip, fn, primary in (("undo", "Undo last point  (Backspace)", self.zone_undo, False),
-                                      ("check", "Finish zone: close the shape you drew  (Enter)", self.zone_finish, False),
-                                      ("backspace", "Delete the last zone", self.zone_delete, False),
-                                      ("trash", "Clear all zones", self.zone_clear, False),
-                                      ("save", "Save zones", self.zone_save, True)):
-            b = QPushButton(objectName="iconPrimary" if primary else "icon")
+        self.zone_btn = {}
+        for name, key, text, tip, fn, primary in (
+                ("edit", "pencil", "Edit zones", "Add, reshape or delete zones", self.zone_edit, True),
+                ("new", "plus", "New zone", "Draw a new zone: pick the area type, then click its corners",
+                 self.zone_new, False),
+                ("undo", "undo", "Undo point", "Remove the last corner you clicked  (Backspace)", self.zone_undo, False),
+                ("cancel", "x", "Cancel", "Stop drawing this zone  (Esc)", self.zone_cancel, False),
+                ("finish", "check", "Finish zone", "Close the shape and add it  (Enter)", self.zone_finish, False),
+                ("delete", "trash", "Delete zone", "Delete the selected zone  (Delete)", self.zone_delete, False),
+                ("clear", "trash", "Clear all", "Remove every zone", self.zone_clear, False),
+                ("discard", "x", "Cancel edits", "Leave edit mode without saving", self.zone_discard_exit, False),
+                ("save", "save", "Save zones", "Save and stop editing", self.zone_save, True)):
+            b = QPushButton(text, objectName="primary" if primary else None)
             b.setToolTip(tip)
-            b.setIconSize(QSize(18, 18))
+            b.setIconSize(QSize(16, 16))
             b.clicked.connect(fn)
             if primary:
-                head.addSpacing(6)
+                head.addSpacing(4)
             head.addWidget(b)
             self.zone_icons.append((b, key, primary))
+            self.zone_btn[name] = b
         cv.addLayout(head)
         self.zone_video = VideoView("Waiting for the camera...")
         self.zone_video.clicked.connect(self.zone_click)
+        self.zone_video.dragged.connect(self.zone_drag)
+        self.zone_video.released.connect(lambda *_: setattr(self, "_zone_drag", None))
+        self.zone_video.hovered.connect(self.zone_hover)
         cv.addWidget(self.zone_video, 1)
+        foot = QHBoxLayout()
+        foot.setSpacing(6)
         self.zone_info = lbl("", "muted")
-        cv.addWidget(self.zone_info)
+        foot.addWidget(self.zone_info)
+        self.zone_chips = QHBoxLayout()
+        self.zone_chips.setSpacing(6)
+        foot.addLayout(self.zone_chips)
+        foot.addStretch()
+        self.zone_align_lbl = lbl("", "muted")
+        foot.addWidget(self.zone_align_lbl)
+        self.zone_dirty_lbl = lbl("", "muted")
+        foot.addWidget(self.zone_dirty_lbl)
+        cv.addLayout(foot)
         v.addWidget(c, 1)
         for key, fn in ((Qt.Key_Return, self.zone_finish), (Qt.Key_Enter, self.zone_finish),
-                        (Qt.Key_Backspace, self.zone_undo)):
+                        (Qt.Key_Backspace, self.zone_undo), (Qt.Key_Delete, self.zone_delete),
+                        (Qt.Key_Escape, self.zone_escape)):
             QShortcut(QKeySequence(key), page, activated=fn, context=Qt.WidgetWithChildrenShortcut)
-        self.zone_step.setText("Pick an area type, then click its corners on the video.")
+        self.zone_mode, self.zone_adding = "view", False
+        self.zone_sel, self.zone_dirty, self._zone_drag = None, False, None
+        self.zone_name.textEdited.connect(self.zone_rename)
+        self.zone_toolbar.hide()
+        for k, b in self.zone_btn.items():                # until the camera is ready: only Edit (disabled)
+            b.setVisible(k == "edit")
+            b.setEnabled(k != "edit")
+        self.zone_step.setText("These are the areas Bantay watches.")
         self._zone_icons_refresh()
+        QTimer.singleShot(1000, self._zone_align_tick)
         return page
 
     def _zone_icons_refresh(self):
@@ -1039,6 +1069,10 @@ class MainWindow(QMainWindow):
 
     # ================================================================== top bar actions
     def go(self, i: int):
+        if self.stack.currentIndex() == P_ZONES and i != P_ZONES and hasattr(self, "zone_btn") \
+                and not self.zones_leave_ok():
+            self.nav.button(P_ZONES).setChecked(True)
+            return
         self.stack.setCurrentIndex(i)
         self.nav.button(i).setChecked(True)
         pipe = self.worker.pipe
@@ -1380,78 +1414,332 @@ class MainWindow(QMainWindow):
             self.refresh_events()
 
     # ================================================================== zones
-    def set_zone_type(self, i: int):
-        if self.worker.pipe:
-            self.worker.pipe.editor.type = ZONE_TYPES[i]
-            self.update_zone_info()
-
-    def zone_click(self, x: int, y: int, button: int):
+    # Zones page logic.
+    #   VIEW mode  - zones are shown with numbers; nothing on the video is clickable. "Edit zones" (or a
+    #                numbered zone button) switches to EDIT mode.
+    #   EDIT mode  - corner dots appear on every zone. Hover a dot (it grows) and drag it to reshape;
+    #                right-click a dot to remove that corner. A zone is selected by grabbing one of its
+    #                dots or its numbered button; then the AREA chips/name edit it and Delete zone works.
+    #                "New zone" -> pick the area type, click the corners, Finish zone.
+    #                "Save zones" saves and returns to VIEW; "Cancel edits" throws the changes away.
+    # The camera-follow (zone_align) is paused while editing; saving makes the current view the reference.
+    def _zones(self):
         pipe = self.worker.pipe
-        if not pipe:
-            return
-        if button == 2:
-            self.zone_finish()
-            return
-        w, h = self.frame_size
-        cur = pipe.editor.current
-        if len(cur) >= 3 and abs(x - cur[0][0] * w) < w * 0.025 and abs(y - cur[0][1] * h) < h * 0.04:
-            self.zone_finish()                         # clicked the first point again: close the shape
-            return
-        cur.append([x / w, y / h])
+        return (pipe, pipe.zones, pipe.editor) if pipe else (None, [], None)
+
+    def _set_dirty(self, dirty: bool = True):
+        self.zone_dirty = dirty
         self.update_zone_info()
 
-    def zone_undo(self):
-        if self.worker.pipe and self.worker.pipe.editor.current:
-            self.worker.pipe.editor.current.pop()
-            self.update_zone_info()
-
-    def zone_finish(self):
-        if self.worker.pipe:
-            ed = self.worker.pipe.editor
-            ed.pending_name = self.zone_name.text().strip()
-            ed.finish()
-            ed.pending_name = ""
-            self.zone_name.clear()
-            self.update_zone_info()
-
-    def zone_delete(self):
-        if self.worker.pipe and self.worker.pipe.zones:
-            self.worker.pipe.zones.pop()
-            self.update_zone_info()
-
-    def zone_clear(self):
-        pipe = self.worker.pipe
-        if not pipe or not (pipe.zones or pipe.editor.current):
-            return
-        if QMessageBox.question(self, "Clear all zones", "Remove every zone? (Press Save afterwards to keep it "
-                                "that way.)") != QMessageBox.Yes:
-            return
-        pipe.zones.clear()
-        pipe.editor.current = []
-        self.update_zone_info("All zones cleared - press Save to keep it.")
-
-    def zone_save(self):
-        if self.worker.pipe:
-            if self.worker.pipe.editor.current:
-                self.zone_finish()
-            self.worker.pipe.save_zones()
-            self.update_zone_info("Zones saved.")
-
-    def update_zone_info(self, extra: str = ""):
-        pipe = self.worker.pipe
+    def _select_zone(self, idx):
+        pipe, zones, ed = self._zones()
         if not pipe:
             return
-        names = ", ".join(z.name for z in pipe.zones) or "none yet"
-        n = len(pipe.editor.current)
-        kind = ZONE_LABELS.get(pipe.editor.type, pipe.editor.type)
-        if n == 0:
-            step = f"Click the corners of the {kind.lower()} area on the video."
-        elif n < 3:
-            step = f"{n} point{'s' if n > 1 else ''} - keep clicking around the area (at least 3)."
+        self.zone_sel = idx if idx is not None and 0 <= idx < len(zones) else None
+        ed.selected = self.zone_sel
+        if self.zone_sel is not None:
+            z = zones[self.zone_sel]
+            self.zone_type.button(ZONE_TYPES.index(z.type)).setChecked(True)
+            self.zone_name.setText(z.name)
+            self.zone_name.setPlaceholderText("Zone name")
         else:
-            step = f"{n} points - click the first point again or press \u2713 to finish the zone."
+            self.zone_name.clear()
+            self.zone_name.setPlaceholderText("Name (optional), e.g. Sofa")
+            self.zone_type.button(ZONE_TYPES.index(ed.type)).setChecked(True)
+        self.update_zone_info()
+
+    def _set_mode(self, mode: str):
+        pipe, _, ed = self._zones()
+        if not pipe:
+            return
+        self.zone_mode = mode
+        ed.editing = mode == "edit"
+        ed.hover = None
+        self.zone_adding = False
+        ed.current = []
+        self.zone_toolbar.setVisible(mode == "edit")
+        self.zone_align_lbl.setText("")
+        self.zone_video.setCursor(Qt.ArrowCursor)
+        self._select_zone(None)
+
+    def zone_edit(self, select=None):
+        pipe, zones, _ = self._zones()
+        if not pipe:
+            return
+        if self.zone_mode != "edit":
+            pipe.bake_alignment()                         # zones snap to where they are drawn right now
+            self.zone_dirty = False
+            self._set_mode("edit")
+        if isinstance(select, int):
+            self._select_zone(select)
+
+    def zone_new(self):
+        pipe, _, ed = self._zones()
+        if not pipe or self.zone_mode != "edit":
+            return
+        self._select_zone(None)
+        ed.current = []
+        self.zone_adding = True
+        self.update_zone_info()
+
+    def set_zone_type(self, i: int):
+        pipe, zones, ed = self._zones()
+        if not pipe:
+            return
+        if self.zone_sel is not None and not self.zone_adding:      # change the selected zone's type
+            z = zones[self.zone_sel]
+            old_auto = re.fullmatch(rf"{re.escape(ZONE_LABELS.get(z.type, z.type))} \d+", z.name)
+            z.type = ZONE_TYPES[i]
+            if old_auto:                                  # auto names follow the type ("Trash 1" -> "Bed 2")
+                n = sum(1 for o in zones if o.type == z.type and o is not z) + 1
+                z.name = f"{ZONE_LABELS[z.type]} {n}"
+                self.zone_name.setText(z.name)
+            self._set_dirty()
+        else:
+            ed.type = ZONE_TYPES[i]                       # type for the new zone
+            self.update_zone_info()
+
+    def zone_rename(self, text: str):
+        pipe, zones, _ = self._zones()
+        if pipe and self.zone_sel is not None and not self.zone_adding and text.strip():
+            zones[self.zone_sel].name = text.strip()
+            self._set_dirty()
+
+    def _handle_at(self, x, y):
+        """(zone index, corner index) of the corner dot under (x, y); the selected zone wins."""
+        _, zones, _ = self._zones()
+        w, h = self.frame_size
+        rx, ry = w * 0.018 + 4, h * 0.03 + 4
+        order = ([self.zone_sel] if self.zone_sel is not None else []) + \
+                [i for i in range(len(zones)) if i != self.zone_sel]
+        best = None
+        for i in order:
+            for j, (px, py) in enumerate(zones[i].points):
+                dx, dy = abs(x - px * w), abs(y - py * h)
+                if dx <= rx and dy <= ry and (best is None or dx + dy < best[2]):
+                    best = (i, j, dx + dy)
+            if best and i == self.zone_sel:
+                break
+        return (best[0], best[1]) if best else None
+
+    def zone_hover(self, x: int, y: int):
+        pipe, _, ed = self._zones()
+        if not pipe or self.zone_mode != "edit" or self._zone_drag:
+            return
+        hit = None if x < 0 or self.zone_adding else self._handle_at(x, y)
+        if hit != ed.hover:
+            ed.hover = hit
+            self.zone_video.setCursor(Qt.SizeAllCursor if hit else
+                                      Qt.CrossCursor if self.zone_adding and x >= 0 else Qt.ArrowCursor)
+
+    def zone_click(self, x: int, y: int, button: int):
+        pipe, zones, ed = self._zones()
+        if not pipe or self.zone_mode != "edit":
+            return                                        # view mode: the video is not clickable
+        w, h = self.frame_size
+        cur = ed.current
+        if self.zone_adding:                              # ---- drawing a new zone
+            if button == 2:
+                self.zone_finish()
+            elif len(cur) >= 3 and abs(x - cur[0][0] * w) < w * 0.025 and abs(y - cur[0][1] * h) < h * 0.04:
+                self.zone_finish()                        # clicked the first corner again: close the shape
+            else:
+                cur.append([x / w, y / h])
+                self.update_zone_info()
+            return
+        hit = self._handle_at(x, y)                       # ---- only corner dots are clickable
+        if hit is None:
+            return
+        i, j = hit
+        if i != self.zone_sel:
+            self._select_zone(i)
+        if button == 2:                                   # right-click a dot: remove that corner
+            z = zones[i]
+            if len(z.points) > 3:
+                z.points.pop(j)
+                ed.hover = None
+                self._set_dirty()
+            else:
+                self.update_zone_info("A zone needs at least 3 corners.")
+            return
+        self._zone_drag = (i, j)
+
+    def zone_drag(self, x: int, y: int):
+        pipe, zones, _ = self._zones()
+        if not pipe or not self._zone_drag:
+            return
+        w, h = self.frame_size
+        i, j = self._zone_drag
+        zones[i].points[j] = [min(max(x / w, 0.0), 1.0), min(max(y / h, 0.0), 1.0)]
+        self._set_dirty()
+
+    def zone_undo(self):
+        pipe, _, ed = self._zones()
+        if pipe and ed.current:
+            ed.current.pop()
+            self.update_zone_info()
+
+    def zone_cancel(self):
+        pipe, _, ed = self._zones()
+        if pipe and self.zone_adding:
+            ed.current = []
+            self.zone_adding = False
+            self.update_zone_info("Drawing cancelled.")
+
+    def zone_finish(self):
+        pipe, zones, ed = self._zones()
+        if not pipe or not self.zone_adding:
+            return
+        if len(ed.current) < 3:
+            self.update_zone_info("Click at least 3 corners first.")
+            return
+        ed.pending_name = self.zone_name.text().strip()
+        ed.finish()
+        ed.pending_name = ""
+        self.zone_adding = False
+        self.zone_dirty = True
+        self._select_zone(len(zones) - 1)                 # the new zone is selected, ready to adjust
+
+    def zone_delete(self):
+        pipe, zones, _ = self._zones()
+        if not pipe or self.zone_mode != "edit" or self.zone_sel is None or self.zone_adding:
+            return
+        name = zones[self.zone_sel].name
+        zones.pop(self.zone_sel)
+        self.zone_dirty = True
+        self._select_zone(None)
+        self.update_zone_info(f"Deleted {name}.")
+
+    def zone_escape(self):
+        if self.zone_adding:
+            self.zone_cancel()
+        elif self.zone_sel is not None:
+            self._select_zone(None)
+
+    def zone_clear(self):
+        pipe, zones, ed = self._zones()
+        if not pipe or self.zone_mode != "edit" or not zones:
+            return
+        if QMessageBox.question(self, "Clear all zones", "Remove every zone? Press Save zones afterwards to keep "
+                                "it that way.") != QMessageBox.Yes:
+            return
+        zones.clear()
+        self.zone_dirty = True
+        self._select_zone(None)
+
+    def zone_save(self):
+        pipe, _, ed = self._zones()
+        if not pipe:
+            return
+        if self.zone_adding and len(ed.current) >= 3:
+            self.zone_finish()
+        pipe.save_zones()
+        self.zone_dirty = False
+        self._set_mode("view")
+        self.update_zone_info("Saved. Bantay is using these zones now.")
+
+    def zone_discard(self):
+        """Throw away unsaved edits (reload the saved zones)."""
+        pipe, _, ed = self._zones()
+        if not pipe:
+            return
+        pipe.reload_zones()
+        ed.current = []
+        self.zone_dirty = False
+
+    def zone_discard_exit(self):
+        if self.zone_dirty and QMessageBox.question(self, "Cancel edits", "Throw away your zone changes?") \
+                != QMessageBox.Yes:
+            return
+        self.zone_discard()
+        self._set_mode("view")
+
+    def zones_leave_ok(self) -> bool:
+        """Called before leaving the Zones page. False = stay."""
+        pipe, _, ed = self._zones()
+        if not pipe:
+            return True
+        if self.zone_mode == "edit" and (self.zone_dirty or ed.current):
+            r = QMessageBox.question(self, "Unsaved zones", "You have zone changes that are not saved. Save them?",
+                                     QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
+            if r == QMessageBox.Save:
+                self.zone_save()
+            elif r == QMessageBox.Discard:
+                self.zone_discard()
+            else:
+                return False
+        if self.zone_mode == "edit":
+            self._set_mode("view")
+        return True
+
+    def _zone_align_tick(self):
+        """Every second: show whether the zones are following a moved camera."""
+        QTimer.singleShot(1000, self._zone_align_tick)
+        pipe = self.worker.pipe
+        if not pipe or not hasattr(self, "zone_align_lbl") or not getattr(pipe, "aligner", None):
+            return
+        st = pipe.aligner.status if pipe.zones and self.zone_mode == "view" else "none"
+        text, col = {"moved": ("Camera moved - zones follow it", T.MUTED),
+                     "lost": ("Camera view changed a lot - check the zones (Edit zones)", T.WARN)}.get(st, ("", T.MUTED))
+        if self.zone_align_lbl.text() != text:
+            self.zone_align_lbl.setText(text)
+            self.zone_align_lbl.setStyleSheet(f"color: {col}; font-weight: 600;" if text else "")
+
+    def update_zone_info(self, extra: str = ""):
+        pipe, zones, ed = self._zones()
+        if not pipe or not hasattr(self, "zone_btn"):
+            return
+        editing, adding = self.zone_mode == "edit", self.zone_adding
+        n = len(ed.current)
+        selected = editing and not adding and self.zone_sel is not None
+        kind = ZONE_LABELS.get(ed.type, ed.type).lower()
+        if not editing:
+            step = ("These are the areas Bantay watches. Press Edit zones to change them."
+                    if zones else "No zones yet. Press Edit zones, then New zone to mark an area.")
+        elif adding:
+            step = (f"New {kind} zone: click its first corner on the video." if n == 0 else
+                    f"New {kind} zone: {n} corner{'s' if n > 1 else ''}. Keep clicking around the area"
+                    + (" (at least 3)." if n < 3 else ", then click the first corner or press Finish zone."))
+        elif selected:
+            step = (f"Editing {self.zone_sel + 1} “{zones[self.zone_sel].name}”: drag its dots to reshape, "
+                    f"change its type or name above. Right-click a dot to remove it.")
+        elif zones:
+            step = "Drag any corner dot to reshape a zone, click a numbered zone below to change it, or press New zone."
+        else:
+            step = "Press New zone, pick the area type, then click the corners of the area on the video."
         self.zone_step.setText(step)
-        self.zone_info.setText(f"Zones: {names}" + (f"   ·   {extra}" if extra else ""))
+        vis = {"edit": not editing,
+               "new": editing and not adding, "undo": adding, "cancel": adding, "finish": adding,
+               "delete": selected, "clear": editing and not adding and not selected and bool(zones),
+               "discard": editing and not adding, "save": editing and not adding}
+        for k, b in self.zone_btn.items():
+            b.setVisible(vis[k])
+            b.setEnabled(True)
+        self.zone_btn["finish"].setEnabled(n >= 3)
+        self.zone_btn["undo"].setEnabled(n > 0)
+        self.zone_dirty_lbl.setText("Unsaved changes" if editing and self.zone_dirty else "")
+        self.zone_dirty_lbl.setStyleSheet(f"color: {T.WARN}; font-weight: 600;" if self.zone_dirty else "")
+        self.zone_info.setText((f"{extra}   " if extra else "") + ("Zones:" if zones else "No zones yet"))
+        while self.zone_chips.count():                    # numbered zone buttons: click one to edit it
+            w = self.zone_chips.takeAt(0).widget()
+            if w:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        for i, z in enumerate(zones):
+            chip = QPushButton(f"{i + 1}  {z.name}", objectName="pill", checkable=True)
+            chip.setChecked(editing and i == self.zone_sel)
+            chip.setToolTip(f"Edit zone {i + 1}")
+            chip.clicked.connect(lambda _c=False, k=i: self._chip_clicked(k))
+            self.zone_chips.addWidget(chip)
+
+    def _chip_clicked(self, k: int):
+        if self.zone_mode != "edit":
+            self.zone_edit(select=k)
+        elif not self.zone_adding:
+            self._select_zone(None if self.zone_sel == k else k)
+        else:
+            self.update_zone_info()
 
     # ================================================================== things
     def _thing_filter(self, key):

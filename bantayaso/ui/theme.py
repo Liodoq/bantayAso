@@ -65,6 +65,9 @@ def _check(color: str) -> str:
 ICONS = {   # 24x24 stroke icons (lucide-style), drawn in the theme colour
     "undo": '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-4"/>',
     "check": '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    "x": '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
+    "plus": '<path d="M12 5v14"/><path d="M5 12h14"/>',
+    "pencil": '<path d="M17 3l4 4L8 20H4v-4z"/><path d="M14 6l4 4"/>',
     "backspace": '<path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="M17.5 9.5l-5 5"/>'
                  '<path d="M12.5 9.5l5 5"/>',
     "trash": '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/>'

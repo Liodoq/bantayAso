@@ -1,5 +1,4 @@
-"""Offscreen check of the Zones page logic (no camera/models): draw, finish, select, reshape,
-move, rename, retype, remove a corner, delete, clear, save, discard, leave-page guard.
+"""Offscreen check of the Zones page logic (no camera/models).
 
     python scripts\\test_zones_ui.py
 """
@@ -29,80 +28,81 @@ def check(name, cond, info=""):
 
 T.apply("light")
 app.setStyleSheet(T.QSS)
-A.Worker.start = lambda self, *a, **k: None                # no camera / models
+A.Worker.start = lambda self, *a, **k: None
 w = A.MainWindow(argparse.Namespace(source=None, config="config.yaml", video=None, camera=None,
                                     no_hazards=True, no_actions=True, no_vlm=True))
-saved = {"n": 0, "zones": [Zone("Bed 1", "bed", [[.1, .5], [.5, .5], [.5, .9], [.1, .9]])]}
-zones = [Zone(z.name, z.type, [p[:] for p in z.points]) for z in saved["zones"]]
-pipe = types.SimpleNamespace(zones=zones, editor=ZoneEditor(zones))
-pipe.save_zones = lambda: saved.update(n=saved["n"] + 1, zones=[Zone(z.name, z.type, [p[:] for p in z.points]) for z in pipe.zones])
-pipe.reload_zones = lambda: pipe.zones.__setitem__(slice(None), [Zone(z.name, z.type, [p[:] for p in z.points]) for z in saved["zones"]])
+copy = lambda zs: [Zone(z.name, z.type, [p[:] for p in z.points]) for z in zs]   # noqa: E731
+saved = {"n": 0, "baked": 0, "zones": [Zone("Bed 1", "bed", [[.1, .5], [.5, .5], [.5, .9], [.1, .9]])]}
+zones = copy(saved["zones"])
+pipe = types.SimpleNamespace(zones=zones, editor=ZoneEditor(zones), aligner=types.SimpleNamespace(status="aligned"))
+pipe.save_zones = lambda: saved.update(n=saved["n"] + 1, zones=copy(pipe.zones))
+pipe.reload_zones = lambda: pipe.zones.__setitem__(slice(None), copy(saved["zones"]))
+pipe.bake_alignment = lambda: saved.update(baked=saved["baked"] + 1)
 w.worker.pipe = pipe
 w.frame_size = (1000, 1000)
 w.go(A.P_ZONES)
 vis = lambda: sorted(k for k, b in w.zone_btn.items() if not b.isHidden())   # noqa: E731
 
-check("idle with zones: only Clear all + Save", vis() == ["clear", "save"], vis())
-check("Save disabled when nothing changed", not w.zone_btn["save"].isEnabled())
-# click empty space -> start drawing
-w.zone_click(700, 100, 1)
-check("click empty spot starts a new zone", len(pipe.editor.current) == 1 and vis() == ["cancel", "finish", "save", "undo"], vis())
-check("Finish disabled under 3 corners", not w.zone_btn["finish"].isEnabled())
-w.zone_click(900, 100, 1); w.zone_click(900, 300, 1)
-check("Finish enabled at 3 corners", w.zone_btn["finish"].isEnabled())
-w.zone_undo()
-check("Undo point removes the last corner", len(pipe.editor.current) == 2)
-w.zone_click(900, 300, 1); w.zone_click(700, 300, 1)
-w.zone_click(702, 101, 1)                                   # click the first corner again
-check("clicking the first corner closes the zone", len(zones) == 2 and not pipe.editor.current, [z.name for z in zones])
-check("new zone is selected for adjusting", w.zone_sel == 1 and vis() == ["delete", "done", "save"], vis())
-check("unsaved changes shown, Save enabled", w.zone_dirty and w.zone_btn["save"].isEnabled()
-      and "Unsaved" in w.zone_dirty_lbl.text())
-# reshape: drag a corner
-w.zone_click(900, 100, 1); w.zone_drag(950, 50); w._zone_drag = None
-check("drag a dot moves that corner", zones[1].points[1] == [0.95, 0.05], zones[1].points[1])
-# move whole zone
-before = [p[:] for p in zones[1].points]
-w.zone_click(800, 200, 1); w.zone_drag(800, 250); w._zone_drag = None
-check("drag inside moves the whole zone", all(abs(b[1] + .05 - a[1]) < 1e-6 for a, b in zip(zones[1].points, before)))
-# rename + retype
-w.zone_name.setText("Sofa"); w.zone_rename("Sofa")
-check("typing a name renames the selected zone", zones[1].name == "Sofa")
-w.zone_type.button(A.ZONE_TYPES.index("danger")).click()
-check("area chip changes the selected zone's type", zones[1].type == "danger")
-# remove a corner (right-click) down to 3 then refuse
-w.zone_click(700, 350, 2)
-check("right-click a dot removes that corner", len(zones[1].points) == 3, len(zones[1].points))
-w.zone_click(int(zones[1].points[0][0] * 1000), int(zones[1].points[0][1] * 1000), 2)
-check("cannot go below 3 corners", len(zones[1].points) == 3)
-# done / select another by clicking it / chips
-w.zone_deselect()
-check("Done stops editing", w.zone_sel is None and vis() == ["clear", "save"], vis())
+check("view mode: only Edit zones, area bar hidden", vis() == ["edit"] and w.zone_toolbar.isHidden(), vis())
+w.zone_click(300, 500, 1)
+check("view mode: clicking the video does nothing", w.zone_sel is None and not pipe.editor.current)
+w.zone_edit()
+check("Edit zones: area bar + New/Clear/Cancel edits/Save appear", vis() == ["clear", "discard", "new", "save"]
+      and not w.zone_toolbar.isHidden() and pipe.editor.editing, vis())
+check("Edit snaps zones to the camera's current view", saved["baked"] == 1)
 w.zone_click(300, 700, 1)
-check("click inside a zone selects it", w.zone_sel == 0)
-w.zone_click(50, 50, 1)
-check("click outside while editing just deselects (no new zone)", w.zone_sel is None and not pipe.editor.current)
-# save
+check("clicking INSIDE a zone does nothing (only corners)", w.zone_sel is None)
+w.zone_hover(101, 502)
+check("hovering a corner highlights it", pipe.editor.hover == (0, 0))
+w.zone_hover(300, 700)
+check("hover away clears it", pipe.editor.hover is None)
+w.zone_click(500, 900, 1); w.zone_drag(600, 950); w._zone_drag = None
+check("grab a corner: selects the zone and drags that corner", w.zone_sel == 0 and zones[0].points[2] == [0.6, 0.95])
+check("selected: Delete zone + Cancel edits + Save + New", vis() == ["delete", "discard", "new", "save"], vis())
+w.zone_name.setText("Big bed"); w.zone_rename("Big bed")
+check("name box renames the selected zone", zones[0].name == "Big bed")
+w.zone_click(100, 900, 2)
+check("right-click a corner removes it", len(zones[0].points) == 3)
+w.zone_click(100, 500, 2)
+check("a zone keeps at least 3 corners", len(zones[0].points) == 3)
+w.zone_new()
+check("New zone: Undo/Cancel/Finish only", vis() == ["cancel", "finish", "undo"], vis())
+check("Finish disabled with no corners", not w.zone_btn["finish"].isEnabled())
+w.zone_type.button(A.ZONE_TYPES.index("danger")).click()
+check("area chip sets the new zone's type (old zone unchanged)", pipe.editor.type == "danger" and zones[0].type == "bed")
+for x, y in ((700, 100), (900, 100), (900, 300), (700, 300)):
+    w.zone_click(x, y, 1)
+w.zone_undo()
+check("Undo point", len(pipe.editor.current) == 3)
+w.zone_click(702, 101, 1)
+check("click the first corner closes it; new zone selected", len(zones) == 2 and zones[1].type == "danger"
+      and w.zone_sel == 1, [z.name for z in zones])
+chips = [w.zone_chips.itemAt(i).widget().text() for i in range(w.zone_chips.count())]
+check("numbered zone buttons", chips == ["1  Big bed", "2  Danger 1"], chips)
+w._chip_clicked(0)
+check("click a numbered button selects that zone", w.zone_sel == 0)
+w.zone_type.button(A.ZONE_TYPES.index("food")).click()
+check("area chip changes the selected zone's type", zones[0].type == "food")
+w.zone_delete()
+check("Delete zone removes it", [z.name for z in zones] == ["Danger 1"] and w.zone_dirty)
 w.zone_save()
-check("Save writes zones and clears the unsaved mark", saved["n"] == 1 and not w.zone_dirty
-      and [z.name for z in saved["zones"]] == ["Bed 1", "Sofa"])
-# delete then discard by leaving the page
-w._select_zone(1); w.zone_delete()
-check("Delete zone removes only the selected zone", [z.name for z in zones] == ["Bed 1"] and w.zone_dirty)
-QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Discard)
-w.go(A.P_MONITOR)
-check("leaving with unsaved changes -> Discard restores the saved zones",
-      [z.name for z in zones] == ["Bed 1", "Sofa"] and w.stack.currentIndex() == A.P_MONITOR)
-w.go(A.P_ZONES)
-w._select_zone(0); w.zone_delete()
+check("Save: writes, back to view mode", saved["n"] == 1 and w.zone_mode == "view" and vis() == ["edit"]
+      and [z.name for z in saved["zones"]] == ["Danger 1"])
+w._chip_clicked(0)
+check("numbered button in view mode opens edit with it selected", w.zone_mode == "edit" and w.zone_sel == 0)
+w.zone_click(700, 100, 1); w.zone_drag(650, 80); w._zone_drag = None
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+w.zone_discard_exit()
+check("Cancel edits restores the saved zones", zones[0].points[0] == [0.7, 0.1] and w.zone_mode == "view",
+      zones[0].points[0])
+w.zone_edit(); w.zone_click(700, 100, 1); w.zone_drag(650, 80); w._zone_drag = None
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Cancel)
 w.go(A.P_MONITOR)
-check("Cancel keeps you on the Zones page", w.stack.currentIndex() == A.P_ZONES)
-QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
-w.zone_clear()
-check("Clear all empties the list (until saved)", zones == [] and w.zone_dirty)
-w.zone_click(100, 100, 1); w.zone_cancel()
-check("Cancel throws away a half-drawn zone", not pipe.editor.current)
+check("leaving with unsaved edits -> Cancel stays", w.stack.currentIndex() == A.P_ZONES)
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Save)
+w.go(A.P_MONITOR)
+check("leaving -> Save saves and leaves", saved["n"] == 2 and w.stack.currentIndex() == A.P_MONITOR
+      and w.zone_mode == "view")
 
 print("ALL PASS" if fails == 0 else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

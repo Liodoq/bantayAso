@@ -76,19 +76,29 @@ def draw_zones(img, zones, editor=None, help_bar: bool = True):
             poly = z.poly(w, h)
             cv2.fillPoly(layer, [poly], C[ZONE_KEY.get(z.type, "watch")])
     cv2.addWeighted(layer, 0.18, img, 0.82, 0, img)
-    for z in zones:
+    sel = getattr(editor, "selected", None) if editor is not None else None
+    editing = bool(getattr(editor, "editing", False)) if editor is not None else False
+    hover = getattr(editor, "hover", None) if editor is not None else None
+    for i, z in enumerate(zones):
         if len(z.points) >= 3:
             poly = z.poly(w, h)
-            color = C[ZONE_KEY.get(z.type, "watch")]
-            cv2.polylines(img, [poly], True, color, 2, cv2.LINE_AA)
-            cv2.putText(img, z.name, tuple(poly[0] + [6, 20]), FONT, 0.55, color, 1, cv2.LINE_AA)
-    sel = getattr(editor, "selected", None) if editor is not None else None
-    if sel is not None and 0 <= sel < len(zones) and len(zones[sel].points) >= 3:
-        poly = zones[sel].poly(w, h)
-        cv2.polylines(img, [poly], True, C["caramel"], 3, cv2.LINE_AA)
-        for p in poly:                                   # drag handles
-            cv2.circle(img, tuple(int(v) for v in p), 9, (255, 255, 255), -1, cv2.LINE_AA)
-            cv2.circle(img, tuple(int(v) for v in p), 9, C["caramel"], 3, cv2.LINE_AA)
+            color = C["caramel"] if i == sel else C[ZONE_KEY.get(z.type, "watch")]
+            cv2.polylines(img, [poly], True, color, 3 if i == sel else 2, cv2.LINE_AA)
+            # numbered tag (matches the numbered zone buttons under the video)
+            tag = f" {i + 1}  {z.name} "
+            (tw, th), _ = cv2.getTextSize(tag, FONT, 0.5, 1)
+            top = poly[int(np.argmin(poly[:, 1]))]          # tag sits just above the zone's top corner
+            x0 = int(min(max(top[0] - tw // 2, 0), w - tw - 4))
+            y0 = int(min(max(top[1] - 10, th + 6), h - 4))
+            cv2.rectangle(img, (x0, y0 - th - 6), (x0 + tw + 4, y0 + 4), color, -1)
+            cv2.putText(img, tag, (x0 + 2, y0 - 1), FONT, 0.5, C["bg"], 1, cv2.LINE_AA)
+            if editing:                                  # corner handles: drag these to reshape
+                for j, p in enumerate(poly):
+                    hot = hover == (i, j)
+                    r = 11 if hot else 8 if i == sel else 6
+                    pt = tuple(int(v) for v in p)
+                    cv2.circle(img, pt, r, C["caramel"] if hot else (255, 255, 255), -1, cv2.LINE_AA)
+                    cv2.circle(img, pt, r, color, 2, cv2.LINE_AA)
     if editor is not None and editor.active:
         pts = [(int(x * w), int(y * h)) for x, y in editor.current]
         for k, p in enumerate(pts):
