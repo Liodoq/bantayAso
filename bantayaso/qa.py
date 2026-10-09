@@ -262,6 +262,72 @@ def _last_alert(q, pipe) -> str | None:
     return f"The last alert was {'a danger' if e['level'] == 3 else 'a warning'} at {t}: {who} {e['reason'].split(' - ')[0]}."
 
 
+TEACH_ALIASES = {
+    'sitting': 'sitting', 'sit': 'sitting', 'nakaupo': 'sitting',
+    'lying': 'lying down', 'lying down': 'lying down', 'nakahiga': 'lying down',
+    'sleeping': 'sleeping', 'asleep': 'sleeping', 'natutulog': 'sleeping',
+    'standing': 'standing', 'nakatayo': 'standing', 'walking': 'walking', 'naglalakad': 'walking',
+    'licking': 'licking itself', 'licking itself': 'licking itself',
+    'scratching': 'scratching itself', 'scratching itself': 'scratching itself',
+    'scratching furniture': 'scratching furniture', 'jumping': 'jumping on furniture',
+    'jumping on furniture': 'jumping on furniture', 'digging': 'digging',
+    'sniffing': 'sniffing the floor', 'sniffing the floor': 'sniffing the floor',
+    'chewing': 'chewing something', 'chewing something': 'chewing something',
+    'eating': 'eating', 'kumakain': 'eating',
+}
+
+
+def _teach_action(question, q, pipe, known, names):
+    """Conservative, anchored grammar: statements about visible dogs, never questions."""
+    text = q.lower().replace('’', "'").strip(' .!')
+    if '?' in question or re.match(r'^(is|are|was|were|does|do|did|can|could|would|should|what|why|when|where|how|if)\b', text):
+        return None
+    cue = bool(re.match(r'^(?:please )?(?:remember|learn)\b', text))
+    text = re.sub(r'^(?:please )?(?:remember|learn)(?: that)?\s+', '', text)
+    deictic = re.fullmatch(r"(?:that's|that is|this is)\s+(.+)", text)
+    match = re.fullmatch(r"(.+?)(?:\s+is\s+|'s\s+)(.+)", text)
+    if deictic:
+        target, action, cue = '', deictic[1], True
+    elif match:
+        target, action = match.groups()
+    else:
+        return 'Say which dog and action, for example: remember Oreo is sitting.' if cue else None
+    explicit_now = bool(re.search(r'\s+(?:right now|now|ngayon)$', action))
+    if not (cue or explicit_now):
+        return None
+    action = re.sub(r'\s+(?:right now|now|ngayon)$', '', action)
+    action = re.sub(r'^actually\s+', '', action)
+    label = TEACH_ALIASES.get(action)
+    classifier = getattr(pipe, 'classifier', None)
+    if classifier is None:
+        return 'Action teaching is unavailable while the action model is off.'
+    if label not in classifier.labels:
+        return 'I cannot teach that action. Choose an action from the teaching menu.'
+    boxes = list(pipe.state.boxes)
+    visible = {tid for tid, _box, _name in boxes if tid >= 0}
+    subject = next((n for n in known if n.lower() == target), None)
+    if target in ('he', 'she', 'it'):
+        if time.monotonic() - getattr(pipe, '_last_subject_at', float('-inf')) <= 60:
+            subject = getattr(pipe, '_last_subject', None)
+        if not subject:
+            return "Please name the dog first; I don't have a recent subject to remember."
+    elif target and not subject and target not in ('my dog', 'the dog', 'this dog'):
+        return f"I don't know a dog named {target}. Name it on the Dogs page first."
+    if subject:
+        ids = [tid for tid, name in names.items() if name == subject and tid in visible]
+        if len(ids) != 1:
+            return f"I can't clearly see {subject} right now. No examples saved."
+        tid = ids[0]
+    else:
+        if len(visible) != 1:
+            return 'Please name or click the dog to teach.' if visible else 'I need a dog in view before learning.'
+        tid = next(iter(visible))
+        subject = names.get(tid)
+    pipe._last_subject = subject
+    pipe._last_subject_at = time.monotonic()
+    return pipe.request_teach(tid, label, subject=subject)
+
+
 def answer(question: str, pipe) -> str:
     """Return a short spoken answer. `pipe` is the running Pipeline."""
     _, q = strip_wake(question)
@@ -270,6 +336,9 @@ def answer(question: str, pipe) -> str:
     known = sorted((pipe.registry.dogs if pipe.registry else {}).keys(), key=len, reverse=True)
     st = pipe.state
     default = pipe.dog_name
+    taught = _teach_action(question, q, pipe, known, dict(names))
+    if taught is not None:
+        return taught
     if not re.sub(r"[\W_]+", "", q):                    # just "Bantay" / "Bantay?" -> short reply, then listen
         return "Yes?"
     # small talk the assistant should handle itself
@@ -290,6 +359,8 @@ def answer(question: str, pipe) -> str:
     if subject is None and re.search(r"\b(he|him|his|she|her|it|siya|niya)\b", ql):
         subject = getattr(pipe, "_last_subject", None)
     pipe._last_subject = subject or getattr(pipe, "_last_subject", None)
+    if subject:
+        pipe._last_subject_at = time.monotonic()
     for fn in (lambda: _yes_no(ql, st, names, default, subject), lambda: _who_is(ql, st, names, default),
                lambda: _how_long(ql, pipe, subject, default), lambda: _last_time(ql, pipe, subject, default),
                lambda: _last_alert(ql, pipe)):

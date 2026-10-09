@@ -45,6 +45,10 @@ class DogRegistry:
             p.unlink()
         for tid in [t for t, n in self.names_by_tid.items() if n == name]:
             self.names_by_tid.pop(tid)
+        for tid, votes in list(self._votes.items()):
+            self._votes[tid] = collections.deque((n if n != name else None for n in votes), maxlen=7)
+        for tid in [t for t, (n, _) in self._enroll.items() if n == name]:
+            self._enroll.pop(tid)
 
     def add_samples(self, name: str, embs) -> None:
         embs = np.atleast_2d(np.asarray(embs, dtype=np.float32))
@@ -55,6 +59,7 @@ class DogRegistry:
     # ---------------- enrollment from the live camera ----------------
     def start_enroll(self, tid: int, name: str, samples: int = 10) -> None:
         self._enroll[tid] = (name.strip(), samples)
+        self._votes.pop(tid, None)
         self.names_by_tid[tid] = name.strip()
 
     def enrolling(self) -> dict:
@@ -79,12 +84,15 @@ class DogRegistry:
     def update(self, embeddings: dict[int, np.ndarray], alive: set[int]) -> dict[int, str]:
         """embeddings: tid -> normalized CLIP image embedding. Returns tid -> name (stable)."""
         for tid, emb in embeddings.items():
+            if tid not in alive:
+                continue
             if tid in self._enroll:                       # collecting samples for a new dog
                 name, left = self._enroll[tid]
                 self.add_samples(name, emb)
                 left -= 1
                 if left <= 0:
                     self._enroll.pop(tid)
+                    self._votes[tid] = collections.deque([name] * 3, maxlen=7)
                 else:
                     self._enroll[tid] = (name, left)
                 self.names_by_tid[tid] = name
@@ -92,13 +100,18 @@ class DogRegistry:
             name, _ = self.match(emb)
             v = self._votes.setdefault(tid, collections.deque(maxlen=7))
             v.append(name)
-            counts = collections.Counter(n for n in v if n)
+            counts = collections.Counter(n for n in v if n in self.dogs)
             if counts:
                 top, c = counts.most_common(1)[0]
                 if c >= 3:
                     self.names_by_tid[tid] = top
+            current = self.names_by_tid.get(tid)
+            if len(v) == v.maxlen and counts.get(current, 0) < 3:
+                self.names_by_tid.pop(tid, None)
         for tid in [t for t in list(self._votes) if t not in alive]:
             self._votes.pop(tid, None)
+        for tid in [t for t in self._enroll if t not in alive]:
+            self._enroll.pop(tid, None)
         # a name belongs to one dog at a time: keep the most recent
         seen = {}
         for tid in sorted(t for t in self.names_by_tid if t in alive):
@@ -109,3 +122,6 @@ class DogRegistry:
     def handover(self, old_tid: int, new_tid: int) -> None:
         if old_tid in self.names_by_tid:
             self.names_by_tid[new_tid] = self.names_by_tid.pop(old_tid)
+        if old_tid in self._votes:
+            self._votes[new_tid] = self._votes.pop(old_tid)  # no new confidence for a track-ID change
+        self._enroll.pop(old_tid, None)  # never capture enrollment photos of an uncertain replacement

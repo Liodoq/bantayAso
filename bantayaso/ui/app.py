@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
         self.worker.message.connect(self.on_message)
         self.worker.event.connect(self.on_event)
         self.worker.ready.connect(self.on_ready)
+        self.worker.teaching.connect(self.on_teaching)
         self.heard.connect(self.on_heard)
         self.answered.connect(self.on_answered)
         self.mic_state.connect(self.on_mic_state)
@@ -447,7 +448,8 @@ class MainWindow(QMainWindow):
         c2v.addWidget(lbl("TEACH WHAT THEY'RE DOING", "h3"))
         c2v.addWidget(lbl("If Bantay shows the wrong activity (e.g. \"scratching\" when your dog is sitting), "
                           "click the dog on the Monitor video → This dog is actually… → pick the right one. "
-                          "Your examples are saved on this laptop and used from then on.", "muted", wrap=True))
+                          "Or say: Bantay, Oreo is sitting right now. Wait for 'Saved' before the dog changes action. "
+                          "Teach at least two actions; examples help only when the match is clear.", "muted", wrap=True))
         rr = QHBoxLayout()
         b_reset = QPushButton("Reset taught actions")
         b_reset.clicked.connect(self.reset_examples)
@@ -1095,6 +1097,10 @@ class MainWindow(QMainWindow):
         self.ask_answer.setText(f"<span style='color:{T.MUTED}'>You: {q}</span><br>"
                                 f"<b style='color:{T.CARAMEL}'>Bantay:</b> {a}")
 
+    def on_teaching(self, event):
+        self.ask_answer.setText(event['message'])
+        self.subtitle.setText(event['message'])
+
     # ================================================================== dogs
     def _crop(self, box) -> QPixmap | None:
         if self.last_img is None:
@@ -1130,9 +1136,7 @@ class MainWindow(QMainWindow):
             if ok and new.strip():
                 self.confirm_dog(tid, box, new.strip())
         else:
-            pipe.classifier.teach(tid, lab)
-            self.ask_answer.setText(f"Thanks! Learning what \"{lab}\" looks like for your dog. "
-                                    "Keep it in view for a couple of seconds.")
+            self.ask_answer.setText(pipe.request_teach(tid, lab, subject=name))
 
     def confirm_dog(self, tid, box, name):
         pm = self._crop(box)
@@ -1233,7 +1237,8 @@ class MainWindow(QMainWindow):
 
     def reset_examples(self):
         if self.worker.pipe and self.worker.pipe.classifier:
-            self.worker.pipe.classifier.forget_examples()
+            queued = self.worker.pipe.request_reset_examples()
+            self.ask_answer.setText('Reset requested.' if queued else 'Please wait, then try reset again.')
 
     # ================================================================== events page
     def _events(self):

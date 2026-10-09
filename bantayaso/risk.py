@@ -79,6 +79,7 @@ class _Track:
     last_seen: float = 0.0
     zone_since: dict = field(default_factory=dict)
     near_memory: dict = field(default_factory=dict)   # hazard name -> (last_seen_t, times_seen, center)
+    disappeared: set = field(default_factory=set)    # confirmed missing on a fresh hazard pass
     chew_since: float | None = None
     chew_last: float = 0.0
     nose_since: float | None = None      # nose-down in one spot (sniffing/eating hidden food)
@@ -246,6 +247,8 @@ class RiskEngine:
                         _l, n, _c = tr.near_memory.get(hz.name, (0.0, 0, None))
                         tr.near_memory[hz.name] = (now, n + 1, hz.center)
             for hz in near:
+                if calm_zone and hz.tier < 2:
+                    continue                         # normal toy/food proximity in its designated area
                 if act is None:                              # no action model: Batch 2 rule
                     add({3: 3, 2: 2}.get(hz.tier, 1), f"near a {hz.name}")
                 elif chewing or mouth >= self.mouth_thr * 0.8 or label == "sniffing the floor":
@@ -261,8 +264,14 @@ class RiskEngine:
                 age = now - last
                 if age > self.memory:
                     tr.near_memory.pop(name)
+                    tr.disappeared.discard(name)
                     continue
-                if hazards_fresh and name not in names_now and n >= 3 and age > 0:
+                if hazards_fresh:
+                    if name in names_now:
+                        tr.disappeared.discard(name)
+                    elif n >= 3 and age > 0:
+                        tr.disappeared.add(name)
+                if name in tr.disappeared:
                     tier = self.vocab_tiers.get(name, 2)
                     if tier >= 2:
                         in_mouth = name

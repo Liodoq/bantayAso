@@ -16,6 +16,7 @@ class Worker(QThread):
     message = Signal(str)
     event = Signal(dict)
     ready = Signal()
+    teaching = Signal(dict)
 
     def __init__(self, args, parent=None):
         super().__init__(parent)
@@ -62,6 +63,7 @@ class Worker(QThread):
             src.stop()
             return
         self.pipe.on_event = lambda ev: self.event.emit(dict(ev))
+        self.pipe.on_teaching = lambda ev: self.teaching.emit(dict(ev))
         rec = ClipRecorder(config.DATA_DIR / "clips", seconds=cfg.get("capture", {}).get("buffer_seconds", 10),
                            fps=cfg.get("capture", {}).get("record_fps", 15))
         self.started_at = time.time()
@@ -70,6 +72,7 @@ class Worker(QThread):
         try:
             while self.running:
                 if self._new_source is not None:
+                    self.pipe.cancel_teaching('The camera source changed.')
                     new, self._new_source = self._new_source, None
                     src.stop()
                     src = open_src(new)
@@ -77,6 +80,8 @@ class Worker(QThread):
                     self.message.emit(f"Switched camera to {new}")
                 fid, frame = src.read()
                 if frame is None or fid == last_id:
+                    if time.monotonic() - last_frame_t > 2:
+                        self.pipe.cancel_teaching('Camera frames stopped arriving.')
                     if time.monotonic() - last_frame_t > 4 and self.camera_ok:
                         self.camera_ok = False
                         self.message.emit("CAMERA_LOST")
@@ -113,6 +118,7 @@ class Worker(QThread):
                     "last_alert": dict(st.last_alert) if st.last_alert else None,
                     "frame_size": (w, h)})
         finally:
+            self.pipe.cancel_teaching('Monitoring stopped.')
             rec.close()
             src.stop()
 

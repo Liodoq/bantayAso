@@ -17,3 +17,13 @@ Desktop app pages: Monitor · Events · Dogs · Zones · Things · Settings. **F
 OpenCV window keys: **R** record · **C** save last 10 s · **S** snapshot · **Z** zones · **H** object boxes · **M** mute · **N** do not disturb · **D** debug · **Q** quit
 
 Tests (no camera/GPU): `python scripts\test_risk.py` · `python scripts\test_qa.py` · Measure a clip: `python scripts\calibrate_actions.py <clip.mp4>`
+
+## Teaching actions
+
+With the dog visible, click it → **This dog is actually…**, or ask **“Bantay, Oreo is sitting right now.”** Use the dog's enrolled name when several dogs are visible. Wait for **Saved 6 examples**; the first reply only acknowledges the lesson. Capture cancels if the dog disappears or its identity becomes uncertain. Questions such as “Is Oreo sitting?” do not teach.
+
+Examples are local visual references, not retrained model weights. Teach at least two distinct actions; examples influence predictions only when they match clearly. Mouth/hazard detection stays independent of a corrected action label.
+
+Repair regressions: `python scripts\test_repairs.py`. Bounded model check on an existing recording: `python scripts\check_inference.py data\clips\<clip>.mp4 --device cuda` (not an accuracy/FPS benchmark).
+
+See [the training plan](docs/TRAINING_PLAN.md) for correcting motion measurements, collecting labeled video and evaluating temporal models, and [BRIEF.md](BRIEF.md) for the current cross-agent handoff and validation limits.

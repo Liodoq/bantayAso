@@ -107,17 +107,22 @@ check("wake word alone -> prompt", a.startswith("Yes?"), a)
 taught = []
 pipe.classifier = types.SimpleNamespace(labels=["sitting", "lying down", "licking itself", "sleeping"],
                                         teach=lambda tid, lab: taught.append((tid, lab)))
+def request_teach(tid, label, subject=None):
+    taught.append((tid, label))
+    return f"I'll remember {label} after collecting examples."
+pipe.request_teach = request_teach
 pipe._actions = {1: None, 2: None}
 a = answer("Bantay, Choco is sitting right now", pipe)
 check("'Choco is sitting right now' teaches Choco=sitting", taught == [(1, "sitting")] and "remember" in a, a)
 a = answer("Bantay, remember she is lying down", pipe)
-check("'remember she is lying down' with 2 dogs and a known subject", "lying down" in a or "name" in a, a)
+check("'remember she is lying down' with 2 dogs and a known subject", taught[-1] == (1, 'lying down') and 'remember' in a, a)
 taught.clear()
 a = answer("Bantay, is Choco sitting?", pipe)
 check("a question does not teach", not taught, a)
 a = answer("Bantay, Choco is sitting", pipe)
 check("plain statement without 'now'/cue does not teach", not taught, a)
 pipe._actions = {1: None}
+pipe.state.boxes = pipe.state.boxes[:1]  # visibility comes from camera state, not an action-cache entry
 a = answer("Bantay, that's licking", pipe)
 check("one dog on camera: 'that's licking' teaches it", taught and taught[-1] == (1, "licking itself"), a)
 

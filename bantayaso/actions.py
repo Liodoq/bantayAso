@@ -7,9 +7,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 
 import cv2
 import numpy as np
+from .examples import blend, reference_gates, save_array
 
 MOUTH_POS = ["a photo of a dog with an object in its mouth",
              "a photo of a dog chewing on something",
@@ -68,6 +70,14 @@ class ActionResult:
     pose: str = ""         # best calm pose (sleeping/lying/sitting/standing/licking): used when a
                            # vigorous label (scratching/digging/jumping) wins but the dog is still
 
+
+@dataclass
+class _Lesson:
+    label: str
+    needed: int
+    started: float
+    features: list
+
 MOTION_LABELS = ("scratching itself", "scratching furniture", "digging", "jumping on furniture")
 POSE_LABELS = ("sleeping", "lying down", "sitting", "standing", "licking itself", "eating",
                "chewing something", "sniffing the floor", "walking")
@@ -107,8 +117,14 @@ class ActionClassifier:
         for f in self.examples_dir.glob("*.npy"):
             lab = f.stem.replace("_", " ")
             if lab in self.labels:
-                self.examples[lab] = np.load(f)
-        self._teach: dict[int, tuple[str, int]] = {}
+                arr = np.load(f, allow_pickle=False)
+                if arr.ndim == 2 and arr.shape[1] == self.t_act.shape[1] and len(arr) and np.isfinite(arr).all():
+                    norm = np.linalg.norm(arr, axis=1, keepdims=True)
+                    if (norm > 0).all():
+                        self.examples[lab] = arr / norm
+        self._example_gates = reference_gates(self.examples)
+        self._teach: dict[int, _Lesson] = {}
+        self.on_teaching = None
         self._mouth: dict[int, float] = {}
 
     @staticmethod
@@ -140,30 +156,82 @@ class ActionClassifier:
             p = (100.0 * f @ self.t_pair.T).softmax(dim=-1)[0].cpu().numpy()
         return float(p[:len(PAIR_FIGHT)].sum())
 
-    def teach(self, tid: int, label: str, samples: int = 6) -> None:
+    def teach(self, tid: int, label: str, samples: int = 6) -> bool:
         """Collect `samples` crops of this dog over the next moments as examples of `label`."""
-        if label in self.labels:
-            self._teach[tid] = (label, samples)
+        if label not in self.labels or tid < 0 or samples < 1:
+            return False
+        self.cancel_teaching('Replaced by a new lesson.', tid)
+        self._teach[tid] = _Lesson(label, samples, time.monotonic(), [])
+        return True
+
+    def _teaching_event(self, tid, label, status, message):
+        if self.on_teaching:
+            self.on_teaching({'track_id': tid, 'label': label, 'status': status, 'message': message})
+
+    def cancel_teaching(self, reason: str, tid: int | None = None) -> None:
+        for key in list(self._teach):
+            if tid is None or key == tid:
+                lesson = self._teach.pop(key)
+                self._teaching_event(key, lesson.label, 'cancelled', f'Lesson cancelled: {reason} No examples saved.')
+
+    def check_teaching(self, visible: set[int], now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        for tid, lesson in list(self._teach.items()):
+            if tid not in visible:
+                self.cancel_teaching('The dog is no longer clearly visible.', tid)
+            elif now - lesson.started > 10.0:
+                self.cancel_teaching('Capture timed out. Try again while the dog holds the action.', tid)
+
+    def _collect_example(self, tid: int, feat: np.ndarray, valid: bool = True) -> None:
+        if tid not in self._teach:
+            return
+        if not valid or not np.isfinite(feat).all() or np.linalg.norm(feat) <= 0:
+            self.cancel_teaching('The dog crop was not usable.', tid)
+            return
+        lesson = self._teach[tid]
+        lesson.features.append(feat.copy() / np.linalg.norm(feat))
+        if len(lesson.features) < lesson.needed:
+            return
+        # Commit the entire lesson only after all frames succeed; interruption saves nothing.
+        lab = lesson.label
+        rows = np.asarray(lesson.features, dtype=np.float32)
+        old = self.examples.get(lab)
+        rows = rows if old is None else np.vstack([old, rows])[-80:]
+        try:
+            save_array(self.examples_dir / f"{lab.replace(' ', '_')}.npy", rows)
+        except OSError:
+            self.cancel_teaching('Could not write the examples to disk.', tid)
+            return
+        self.examples[lab] = rows
+        self._example_gates = reference_gates(self.examples)
+        self._teach.pop(tid)
+        note = (' Teach another action too before examples can influence recognition.' if len(self.examples) < 2
+                else ' Examples influence recognition only when the match is clear.' if lab in self._example_gates
+                else ' These examples are not distinct enough yet to influence recognition.')
+        self._teaching_event(tid, lab, 'saved', f'Saved {lesson.needed} examples of {lab}.' + note)
 
     def forget_examples(self) -> None:
+        self.cancel_teaching('Taught actions were reset.')
         self.examples = {}
+        self._example_gates = {}
         for f in self.examples_dir.glob("*.npy"):
             f.unlink()
 
     def _blend_examples(self, p_text: np.ndarray, feat: np.ndarray) -> np.ndarray:
-        if len(self.examples) < 2:
-            return p_text
-        idx = [j for j, l in enumerate(self.labels) if l in self.examples]
-        sims = np.array([float(np.max(self.examples[self.labels[j]] @ feat)) for j in idx])
-        e = np.exp(100.0 * (sims - sims.max()))
-        p_ex = np.zeros_like(p_text)
-        p_ex[idx] = e / e.sum()
-        mix = 0.6 * p_ex + 0.4 * p_text          # the owner's examples weigh more than text
-        return mix / mix.sum()
+        return blend(self.labels, self.examples, self._example_gates, p_text, feat)
 
-    def __call__(self, frame: np.ndarray, dogs) -> dict[int, ActionResult]:
+    def collect_teaching(self, frame, dogs) -> None:
+        """Called after the pipeline validates the current frame's dog identities."""
+        for d in dogs:
+            if d.track_id in self.embeddings and getattr(d, 'observed', True):
+                crop = self._crops(frame, d.box)[0]
+                self._collect_example(d.track_id, self.embeddings[d.track_id],
+                                      valid=crop.size > 0 and min(crop.shape[:2]) >= 16)
+
+    def __call__(self, frame: np.ndarray, dogs, collect: bool = True) -> dict[int, ActionResult]:
         from PIL import Image
         torch = self.torch
+        self.check_teaching({d.track_id for d in dogs if getattr(d, 'observed', True)})
         imgs, owners = [], []
         for d in dogs:
             for k, c in enumerate(self._crops(frame, d.box)):
@@ -188,15 +256,6 @@ class ActionClassifier:
             fi = full[0] if full else idx[0]
             self.embeddings[d.track_id] = feats[fi]
             p = self._blend_examples(act[fi], feats[fi])
-            if d.track_id in self._teach:
-                lab, left = self._teach[d.track_id]
-                old = self.examples.get(lab)
-                self.examples[lab] = feats[fi][None] if old is None else np.vstack([old, feats[fi][None]])[-80:]
-                np.save(self.examples_dir / f"{lab.replace(' ', '_')}.npy", self.examples[lab])
-                if left <= 1:
-                    self._teach.pop(d.track_id)
-                else:
-                    self._teach[d.track_id] = (lab, left - 1)
             mouth_now = max(float(mo[i][:npos].sum()) for i in idx)   # best of whole/head crops
             # a dog eating with its head down looks "lying down" as a whole, so take the best
             # chewing/eating probability over the head crops too
@@ -215,6 +274,8 @@ class ActionClassifier:
             pose = self.labels[int(pose_idx[0])] if pose_idx else self.labels[j2]
             out[tid] = ActionResult(self.labels[j], float(e[j]), self._mouth[tid], self._chew[tid],
                                     label2=self.labels[j2], pose=pose)
+        if collect:
+            self.collect_teaching(frame, dogs)
         for tid in [t for t in self._ema if t not in {d.track_id for d in dogs}]:
             self._ema.pop(tid, None)
             self._mouth.pop(tid, None)

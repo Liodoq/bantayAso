@@ -140,5 +140,7 @@ def phrase(level: int, reason: str, who: str = "your dog") -> str:
         return f"{'Danger' if level == 3 else 'Warning'}! {r.capitalize()}. Check {who}'s mouth now!"
     elif r.startswith("has been"):
         r = r.replace(" s", " seconds") if r.endswith(" s") else r
-        return f"Danger! {who.capitalize()} {r}. Check now!"
+        prefix = {2: "Warning! ", 3: "Danger! "}.get(level, "")
+        suffix = " Check now!" if level >= 2 else ""
+        return f"{prefix}{who.capitalize()} {r}.{suffix}"
     return TEMPLATES.get(level, "{who} is {reason}.").format(who=who.capitalize(), reason=r)

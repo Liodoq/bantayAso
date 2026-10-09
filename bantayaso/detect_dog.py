@@ -14,6 +14,7 @@ class Dog:
     track_id: int          # stable ID across frames (-1 if the tracker has not assigned one yet)
     box: tuple             # (x1, y1, x2, y2) in pixels
     conf: float
+    observed: bool = True   # False when briefly held for display after a missed detection
 
     @property
     def center(self):
@@ -73,7 +74,7 @@ class DogDetector:
             if tid in seen:
                 continue
             if now - t <= self.hold_seconds and all(self._overlap(d.box, o.box) < 0.5 for o in out):
-                out.append(d)                      # briefly missed: keep showing it (if not a duplicate)
+                out.append(Dog(d.track_id, d.box, d.conf, observed=False))
             else:
                 self._last.pop(tid)
         return out

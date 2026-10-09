@@ -6,6 +6,7 @@ frame -> dogs (YOLO11) -> hazards (YOLOE, every N frames) -> actions/mouth (CLIP
 from __future__ import annotations
 
 import time
+import queue
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -119,6 +120,13 @@ class Pipeline:
         self._fps_n, self._fps_t = 0, time.perf_counter()
         self.on_event = None                # optional callback(event_dict) for the UI
         self._pending_vocab = None
+        self._teaching_requests = queue.Queue(maxsize=16)
+        self._teaching_targets = ()
+        self._teaching_frame_at = 0.0
+        self._lesson_subjects = {}
+        self.on_teaching = None
+        if self.classifier:
+            self.classifier.on_teaching = self._teaching_event
 
     # ------------------------------------------------------------------
     def save_zones(self) -> None:
@@ -153,6 +161,80 @@ class Pipeline:
         """Things page: apply a new object list on the next frame (pipeline thread)."""
         self._pending_vocab = dict(vocab)
 
+    def _teaching_event(self, event):
+        self.log('[TEACH] ' + event['message'])
+        if self.on_teaching:
+            self.on_teaching(event)
+        if event['status'] in ('saved', 'cancelled'):
+            self._lesson_subjects.pop(event['track_id'], None)
+        if event['status'] == 'saved' and self.voice and not self.dnd:
+            self.speaker.say(event['message'])
+
+    def request_teach(self, tid: int, label: str, subject: str | None = None) -> str:
+        """Thread-safe request; camera/identity validation and capture happen on process()."""
+        if self.classifier is None or label not in self.classifier.labels:
+            return 'I cannot teach that action. Choose an action from the teaching menu.'
+        if time.monotonic() - self._teaching_frame_at > 2.0:
+            return 'I need a current camera view before learning. No examples saved.'
+        targets = dict(self._teaching_targets)
+        if tid < 0 or tid not in targets or (subject and targets[tid] != subject):
+            return 'I cannot clearly identify that dog right now. Please select it again.'
+        try:
+            self._teaching_requests.put_nowait(('teach', tid, label, subject, time.monotonic()))
+        except queue.Full:
+            return 'Please wait for the current lesson, then try again.'
+        return f"I'll remember {label} after collecting examples. Keep the dog doing it until I say saved."
+
+    def request_reset_examples(self):
+        try:
+            self._teaching_requests.put_nowait(('reset', None, None, None, time.monotonic()))
+            return True
+        except queue.Full:
+            return False
+
+    def cancel_teaching(self, reason):
+        """Processing-thread only, also called when the source disconnects/changes."""
+        self._teaching_frame_at = 0.0
+        self._teaching_targets = ()
+        if self.classifier:
+            self.classifier.cancel_teaching(reason)
+        while True:
+            try:
+                kind, tid, label, _, _ = self._teaching_requests.get_nowait()
+            except queue.Empty:
+                break
+            if kind == 'teach':
+                self._teaching_event({'track_id': tid, 'label': label, 'status': 'cancelled',
+                                      'message': f'Lesson cancelled: {reason} No examples saved.'})
+            elif self.classifier:
+                self.classifier.forget_examples()
+
+    def _prepare_teaching(self, dogs, now):
+        if self.classifier is None:
+            return
+        visible = {d.track_id for d in dogs if d.track_id >= 0 and getattr(d, 'observed', True)}
+        self.classifier.check_teaching(visible, now)
+        names = self.registry.names_by_tid if self.registry else {}
+        for tid, subject in list(self._lesson_subjects.items()):
+            if subject and names.get(tid) != subject:
+                self.classifier.cancel_teaching('The dog identity is no longer certain.', tid)
+        while True:
+            try:
+                kind, tid, label, subject, requested = self._teaching_requests.get_nowait()
+            except queue.Empty:
+                break
+            if kind == 'reset':
+                self.classifier.forget_examples()
+                self._teaching_event({'track_id': -1, 'label': '', 'status': 'reset',
+                                      'message': 'Taught actions reset.'})
+            elif now - requested > 2.0 or tid not in visible or (subject and names.get(tid) != subject):
+                self._teaching_event({'track_id': tid, 'label': label, 'status': 'cancelled',
+                                      'message': 'Lesson cancelled: the dog is no longer clear. No examples saved.'})
+            elif self.classifier.teach(tid, label):
+                self._lesson_subjects[tid] = subject
+                self._teaching_event({'track_id': tid, 'label': label, 'status': 'learning',
+                                      'message': f'Learning {label}. Keep the dog doing this until examples are saved.'})
+
     def process(self, frame: np.ndarray) -> tuple[np.ndarray, State]:
         st = self.state
         if self._pending_vocab is not None:
@@ -179,9 +261,12 @@ class Pipeline:
         self._n += 1
 
         motions = self.motion.update(frame, dogs)
+        self._prepare_teaching(dogs, now)
+        action_updated = False
         if self.classifier is not None and dogs and now - self._last_act >= self.action_every:
             t2 = time.perf_counter()
-            self._actions = self.classifier(frame, dogs)
+            self._actions = self.classifier(frame, dogs, collect=False)
+            action_updated = True
             st.timings["actions"] = (time.perf_counter() - t2) * 1000
             self._last_act = now
         for tid, (lvl, en) in motions.items():
@@ -219,6 +304,14 @@ class Pipeline:
             names = {d.track_id: self.registry.names_by_tid[d.track_id] for d in dogs
                      if d.track_id in self.registry.names_by_tid}
         self.names = names
+        if action_updated:
+            for tid, subject in list(self._lesson_subjects.items()):
+                if subject and names.get(tid) != subject:
+                    self.classifier.cancel_teaching('The dog identity is no longer certain.', tid)
+            self.classifier.collect_teaching(frame, dogs)
+        self._teaching_targets = tuple((d.track_id, names.get(d.track_id)) for d in dogs
+                                       if d.track_id >= 0 and getattr(d, 'observed', True))
+        self._teaching_frame_at = time.monotonic()
         st.assessments, st.dogs = found, len(dogs)
         st.boxes, st.frame_w = [(d.track_id, d.box, names.get(d.track_id)) for d in dogs], w
         self.history.record(now, found, names)
