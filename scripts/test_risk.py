@@ -99,5 +99,15 @@ for i in range(15, 40):
     a = e.update([dog7], [], [], SIZE, now=i * 0.1, actions={7: eat})[0]
 check("tracker ID switch keeps the chewing timer (warns on time)", a.level == 2, a.reason)
 
+# named zones: food bowl / play area / named no-go
+bowl = Zone("Food bowl", "food", [[0.35, 0.6], [0.6, 0.6], [0.6, 0.8], [0.35, 0.8]])
+sofa = Zone("Sofa", "nogo", [[0.35, 0.6], [0.6, 0.6], [0.6, 0.8], [0.35, 0.8]])
+e = RiskEngine(CFG); a, _ = run(e, 120, [], [bowl], act=A("eating", .3, .45, .44))
+check("eating at the food bowl stays calm (even 12 s)", a.level == 0 and "food bowl" in a.reason, a.reason)
+e = RiskEngine(CFG); a, _ = run(e, 40, [battery], [bowl], act=A("eating", .3, .45, .44))
+check("battery at the food bowl is still danger", a.level == 3, a.reason)
+e = RiskEngine(CFG); a, _ = run(e, 30, [], [sofa], act=A("sitting", .4, .2, .2))
+check("named no-go zone is spoken by name", a.level == 2 and "Sofa" in a.reason, a.reason)
+
 print("ALL PASS" if fails == 0 else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

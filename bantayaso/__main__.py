@@ -24,7 +24,8 @@ WINDOW = "BantayAso"
 
 def parse_args():
     p = argparse.ArgumentParser(prog="bantayaso")
-    p.add_argument("--source", help="USB index (e.g. 1) or path to a video file")
+    p.add_argument("--source", help="USB index (e.g. 1), a video file, or a stream URL "
+                                    "(phone IP Webcam: http://<phone-ip>:8080/video)")
     p.add_argument("--cv", action="store_true", help="use the simple OpenCV window instead of the app UI")
     p.add_argument("--no-actions", action="store_true", help="skip the CLIP action model")
     p.add_argument("--no-hazards", action="store_true", help="dog detection only")

@@ -1,0 +1,68 @@
+"""Offline tests for Ask Bantay answers (no camera, GPU, mic or Ollama).  python scripts/test_qa.py"""
+import sys
+import tempfile
+import time
+import types
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bantayaso.events import EventLog            # noqa: E402
+from bantayaso.history import ActivityHistory    # noqa: E402
+from bantayaso.qa import answer, guard           # noqa: E402
+from bantayaso.risk import Assessment            # noqa: E402
+
+fails = 0
+
+
+def check(name, cond, info=""):
+    global fails
+    print(("[PASS] " if cond else "[FAIL] ") + name + (f"  -> {info}" if info else ""))
+    fails += 0 if cond else 1
+
+
+d = Path(tempfile.mkdtemp())
+hist = ActivityHistory()
+now = time.monotonic()
+for i in range(150):                           # 2.5 minutes of fake history
+    hist.record(now - 150 + i, [Assessment(1, 0, 0, "just lying down on the bed" if i < 100 else
+                                           "chewing an unknown object - check what it is", zone="Bed 1"),
+                                Assessment(2, 0, 0, "sleeping")], {1: "Choco", 2: "Bantay"})
+log = EventLog(d / "e.db", d / "s")
+log.add(Assessment(1, 2, 2, "chewing an unknown object - check what it is", "Bed 1"), None, "Choco")
+st = types.SimpleNamespace(status="WARNING: Choco is chewing an unknown object", level=2, dogs=2,
+                           assessments=[Assessment(1, 2, 2, "chewing an unknown object - check what it is", "Bed 1"),
+                                        Assessment(2, 0, 0, "sleeping")],
+                           boxes=[(1, (100, 300, 300, 500), "Choco"), (2, (900, 300, 1100, 500), "Bantay")], frame_w=1280)
+reg = types.SimpleNamespace(names_by_tid={1: "Choco", 2: "Bantay"}, dogs={"Choco": [], "Bantay": []})
+llm_reply = {"text": None}
+pipe = types.SimpleNamespace(registry=reg, state=st, dog_name="your dog", history=hist, events=log,
+                             ask_llm=lambda q, facts: llm_reply["text"])
+
+a = answer("Bantay, what were my dogs doing for the past 2 minutes?", pipe)
+check("past N minutes summary names both dogs", "Choco" in a and "Bantay" in a and "2 minutes" in a, a)
+a = answer("Bantay, what was Choco doing?", pipe)
+check("per-dog question only talks about Choco", "Choco" in a and "Bantay was" not in a, a)
+a = answer("and what about him in the last 2 minutes?", pipe)
+check("follow-up pronoun keeps the last dog", "Choco" in a, a)
+a = answer("Bantay, where are my dogs?", pipe)
+check("where -> positions", "Choco" in a and ("left" in a or "bed" in a.lower()), a)
+a = answer("how many dogs do you see", pipe)
+check("how many", "2 dogs" in a, a)
+a = answer("Bantay, what is Bantay doing right now?", pipe)
+check("right now -> current state", "sleeping" in a, a)
+a = answer("Bantay, what happened today?", pipe)
+check("today -> event log summary", "1 alert" in a, a)
+a = answer("Bantay, did anything dangerous happen in the last 5 minutes?", pipe)
+check("alerts in window", "alert" in a and "Choco" in a, a)
+a = answer("Bantay, when did Choco start chewing?", pipe)
+check("when -> timeline with clock times", ":" in a and "chewing" in a, a)
+llm_reply["text"] = "Choco chewed a battery for 40 seconds."
+a = answer("Bantay, is Choco okay to leave alone?", pipe)
+check("LLM invents 'battery' -> rejected, safe fallback used", "battery" not in a, a)
+check("guard keeps a faithful LLM answer", guard("Choco is chewing something; check on him.", "Choco chewing") is not None)
+llm_reply["text"] = None
+a = answer("Bantay", pipe)
+check("wake word alone -> prompt", a.startswith("Yes?"), a)
+
+print("ALL PASS" if fails == 0 else f"{fails} FAILED")
+sys.exit(1 if fails else 0)

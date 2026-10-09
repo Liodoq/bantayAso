@@ -10,9 +10,10 @@ Built for the AppBuildersPH Hackathon 2026 (Local AI). Work in progress — setu
 python -m bantayaso                         # desktop app (Monitor / Events / Zones / Settings, tray)
 python -m bantayaso --source data\clips\rec_YYYYMMDD_HHMMSS.mp4   # test on a recorded clip
 python -m bantayaso --cv                    # simple OpenCV developer window
+python -m bantayaso --source http://<phone-ip>:8080/video   # phone as a wireless camera (IP Webcam app)
 ```
 Desktop app: **F12** shows technical info on the video. Closing the window keeps it running in the tray (right-click the paw icon → Quit).
 
 OpenCV window keys: **R** record · **C** save last 10 s · **S** snapshot · **Z** zones · **H** object boxes · **M** mute · **N** do not disturb · **D** debug · **Q** quit
 
-Tests (no camera/GPU): `python scripts\test_risk.py` · Measure a clip: `python scripts\calibrate_actions.py <clip.mp4>`
+Tests (no camera/GPU): `python scripts\test_risk.py` · `python scripts\test_qa.py` · Measure a clip: `python scripts\calibrate_actions.py <clip.mp4>`

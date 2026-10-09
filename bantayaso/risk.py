@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import math
 import time
+
+from .zones import zone_phrase
 from dataclasses import dataclass, field
 
 LEVELS = ["safe", "watch", "warning", "danger"]
-ZONE_LEVEL = {"danger": 3, "trash": 2, "nogo": 2, "bed": 0}
+ZONE_LEVEL = {"danger": 3, "trash": 2, "nogo": 2, "bed": 0, "food": 0, "play": 0}
 ZONE_TEXT = {"danger": "in the danger zone", "trash": "at the trash", "nogo": "in a no-go area",
              "bed": "on the bed"}
 CHEW_LABELS = ("chewing something", "eating")
@@ -173,16 +175,19 @@ class RiskEngine:
                 if zone_hit is None or k != zone_hit.name:
                     tr.zone_since.pop(k)
             on_bed = False
+            calm_zone = zone_hit is not None and zone_hit.type in ("food", "play")
             if zone_hit:
                 since = tr.zone_since.setdefault(zone_hit.name, now)
                 if zone_hit.type == "bed":
                     on_bed = True
+                elif calm_zone:
+                    pass
                 else:
                     dwell = now - since >= self.zone_dwell
                     lvl = ZONE_LEVEL.get(zone_hit.type, 1) if dwell else 1
                     if zone_hit.type == "danger" and not (chewing or dwell):
                         lvl = 1
-                    add(lvl, ZONE_TEXT.get(zone_hit.type, "in a zone"))
+                    add(lvl, zone_phrase(zone_hit))
 
             # ---------- hazards near this dog (each hazard belongs to its nearest dog) ----------
             near = []
@@ -216,7 +221,9 @@ class RiskEngine:
                         add(3 if tier >= 3 else 2, f"the {name} disappeared near its mouth")
 
             # ---------- behaviour rules ----------
-            if chewing:
+            if chewing and calm_zone and not any(hz.tier >= 2 for hz in near) and not in_mouth:
+                pass                                         # eating at the bowl / chewing toys: normal
+            elif chewing:
                 named = [hz for hz in near]
                 if not named and not in_mouth:
                     add(2, "chewing an unknown object - check what it is")
@@ -224,7 +231,7 @@ class RiskEngine:
                     add(3, f"has been chewing for {int(chew_for)} s")
                 if zone_hit is not None and zone_hit.type == "danger":
                     add(3, "chewing in the danger zone")
-            elif nose_down:
+            elif nose_down and not calm_zone:
                 add(2, "nose-down eating something in one spot - check what it is")
             elif label in BUSY_LABELS and motion in ("active", "frantic"):
                 add(2, label)
@@ -240,10 +247,12 @@ class RiskEngine:
             if reasons and raw > 0:
                 reasons.sort(key=lambda r: -r[0])
                 reason = reasons[0][1]
+            elif chewing and calm_zone:
+                reason = ("eating " if zone_hit.type == "food" else "chewing ") + zone_phrase(zone_hit)
             elif label in CALM_TEXT:
-                reason = CALM_TEXT[label] + (" on the bed" if on_bed else "")
+                reason = CALM_TEXT[label] + (" " + zone_phrase(zone_hit) if zone_hit and zone_hit.type in ("bed", "food", "play") else "")
             elif motion == "still":
-                reason = "resting on the bed" if on_bed else "resting"
+                reason = ("resting " + zone_phrase(zone_hit)) if on_bed else "resting"
             else:
                 reason = "all calm"
             out.append(Assessment(tid, level, raw, reason, zone_hit.name if zone_hit else None,

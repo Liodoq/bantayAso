@@ -40,7 +40,7 @@ def label(img, text, x, y, color, text_color=None):
 
 
 LEVEL_KEY = ["caramel", "watch", "warning", "danger"]
-ZONE_KEY = {"trash": "warning", "danger": "danger", "nogo": "watch", "bed": "safe"}
+ZONE_KEY = {"trash": "warning", "danger": "danger", "nogo": "watch", "bed": "safe", "food": "caramel", "play": "caramel"}
 
 
 def draw_dogs(img, dogs, levels: dict | None = None, names: dict | None = None):
@@ -89,7 +89,7 @@ def draw_zones(img, zones, editor=None):
         if len(pts) > 1:
             cv2.polylines(img, [np.array(pts, np.int32)], False, C["caramel"], 2, cv2.LINE_AA)
         help_ = (f"ZONE EDIT - type: {editor.type.upper()}  |  click: add point  right-click/ENTER: finish  "
-                 "1 trash 2 danger 3 no-go 4 bed  BACKSPACE: undo  X: delete last  Z: save & exit")
+                 "1 trash 2 danger 3 no-go 4 bed 5 food 6 play  BACKSPACE: undo  X: delete last  Z: save & exit")
         cv2.rectangle(img, (0, h - 34), (w, h), C["bg"], -1)
         cv2.putText(img, help_, (10, h - 12), FONT, 0.5, C["caramel"], 1, cv2.LINE_AA)
 

@@ -21,7 +21,8 @@ class FrameSource:
     def __init__(self, source, backend: str = "msmf", width: int = 1280, height: int = 720,
                  fps: int = 30, loop_file: bool = True):
         self.source = source
-        self.is_file = isinstance(source, str) and not source.isdigit()
+        self.is_url = isinstance(source, str) and "://" in source        # rtsp:// or http://
+        self.is_file = isinstance(source, str) and not source.isdigit() and not self.is_url
         self.backend = backend
         self.size = (width, height)
         self.req_fps = fps
@@ -51,7 +52,10 @@ class FrameSource:
     def _open(self) -> bool:
         if self._cap:
             self._cap.release()
-        if self.is_file:
+        if self.is_url:
+            self._cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        elif self.is_file:
             if not Path(self.source).exists():
                 raise FileNotFoundError(self.source)
             self._cap = cv2.VideoCapture(self.source)
@@ -79,7 +83,8 @@ class FrameSource:
                     continue
                 self.connected = False
                 continue
-            if not self.is_file and (frame.shape[1], frame.shape[0]) != self.size:
+            if not self.is_file and (frame.shape[1], frame.shape[0]) != self.size and \
+                    abs(frame.shape[1] / frame.shape[0] - self.size[0] / self.size[1]) < 0.05:
                 frame = cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA)
             with self._lock:
                 self._frame = frame

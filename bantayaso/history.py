@@ -52,6 +52,37 @@ class ActivityHistory:
         while self.counts and now - self.counts[0][0] > self.max_s:
             self.counts.popleft()
 
+    def segments(self, minutes: int, who: str | None = None, now: float | None = None) -> list[tuple]:
+        """Compress per-second samples into (start_wall, end_wall, who, activity, zone) runs."""
+        now = now or time.monotonic()
+        off = time.time() - time.monotonic()
+        rows = [x for x in self.samples if now - x[0] <= minutes * 60 and (who is None or x[1] == who)]
+        segs: dict[str, list] = {}
+        for t, w, act, _lvl, zone in rows:
+            runs = segs.setdefault(w, [])
+            if runs and runs[-1][3] == act and t - runs[-1][1] <= 3:
+                runs[-1][1] = t
+            else:
+                runs.append([t, t, w, act, zone])
+        out = []
+        for runs in segs.values():
+            for st_, en, w, act, zone in runs:
+                if en - st_ >= 3:                        # ignore 1-2 s blips
+                    out.append((st_ + off, en + off, w, act, zone))
+        return sorted(out)
+
+    def timeline(self, minutes: int, who: str | None = None, default_name: str = "your dog") -> str:
+        segs = self.segments(minutes, who)
+        if not segs:
+            return f"I haven't seen {'any dog' if not who else who} in the last {fmt_dur(minutes * 60)}."
+        clock = lambda t: time.strftime("%I:%M", time.localtime(t)).lstrip("0")
+        parts = []
+        for st_, en, w, act, zone in segs[-6:]:
+            name = default_name if w == "unnamed" else w
+            where = f" ({zone})" if zone else ""
+            parts.append(f"{clock(st_)}–{clock(en)} {name} was {act}{where}")
+        return "; ".join(parts) + "."
+
     def summary(self, minutes: int, now: float | None = None) -> dict:
         now = now or time.monotonic()
         win = minutes * 60
@@ -64,8 +95,12 @@ class ActivityHistory:
         return {"minutes": minutes, "per_dog": {k: dict(v) for k, v in per.items()},
                 "max_dogs": max(seen, default=0), "covered_s": min(covered, win)}
 
-    def describe(self, minutes: int, default_name: str = "your dog") -> str:
+    def describe(self, minutes: int, default_name: str = "your dog", only: str | None = None) -> str:
         s = self.summary(minutes)
+        if only:
+            s["per_dog"] = {k: v for k, v in s["per_dog"].items() if k.lower() == only.lower()}
+            if not s["per_dog"]:
+                return f"I haven't seen {only} in the last {fmt_dur(minutes * 60)}."
         if not s["per_dog"]:
             return f"I haven't seen any dog in the last {fmt_dur(minutes * 60)}."
         parts = []

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFileDialo
                                QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
 
 from .. import config
-from ..zones import ZONE_TYPES
+from ..zones import ZONE_LABELS, ZONE_TYPES
 from . import theme as T
 from .widgets import HourChart, RiskMeter, VideoView, card, paw_pixmap, stat_card
 from .worker import Worker
@@ -283,16 +283,22 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(20, 18, 20, 18)
         v.setSpacing(12)
         v.addWidget(lbl("Zones", "h1"))
-        v.addWidget(lbl("Click points around an area on the camera view, pick its type, then Finish zone. "
-                        "Right-click also finishes. Save when done.", "muted", wrap=True))
+        v.addWidget(lbl("Mark furniture and areas: pick a type, type a name (e.g. Sofa, Charger corner, Food bowl), "
+                        "click points around it on the camera view, then Finish zone. Right-click also finishes. "
+                        "Food bowl and Play area make eating / chewing toys there count as normal.", "muted", wrap=True))
         bar = QHBoxLayout()
         self.zone_type = QButtonGroup(self)
-        for i, (t, name) in enumerate(zip(ZONE_TYPES, ["Trash", "Danger", "No-go", "Bed"])):
+        for i, t in enumerate(ZONE_TYPES):
+            name = ZONE_LABELS[t]
             b = QPushButton(name, objectName="pill", checkable=True)
             self.zone_type.addButton(b, i)
             bar.addWidget(b)
         self.zone_type.button(0).setChecked(True)
         self.zone_type.idClicked.connect(self.set_zone_type)
+        self.zone_name = QLineEdit()
+        self.zone_name.setPlaceholderText("Name (optional): Sofa, Charger corner...")
+        self.zone_name.setFixedWidth(240)
+        bar.addWidget(self.zone_name)
         bar.addStretch()
         for text, fn in (("Undo point", self.zone_undo), ("Finish zone", self.zone_finish),
                          ("Delete last zone", self.zone_delete)):
@@ -724,7 +730,11 @@ class MainWindow(QMainWindow):
 
     def zone_finish(self):
         if self.worker.pipe:
-            self.worker.pipe.editor.finish()
+            ed = self.worker.pipe.editor
+            ed.pending_name = self.zone_name.text().strip()
+            ed.finish()
+            ed.pending_name = ""
+            self.zone_name.clear()
             self.update_zone_info()
 
     def zone_delete(self):
@@ -734,7 +744,8 @@ class MainWindow(QMainWindow):
 
     def zone_save(self):
         if self.worker.pipe:
-            self.worker.pipe.editor.finish()
+            if self.worker.pipe.editor.current:
+                self.zone_finish()
             self.worker.pipe.save_zones()
             self.update_zone_info("Zones saved.")
 

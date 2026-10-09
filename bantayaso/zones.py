@@ -1,15 +1,17 @@
 """Zones drawn on the camera view. Stored normalized (0..1) in config.yaml so any resolution works.
 
-Types: trash, danger, nogo, bed
+Types: trash, danger, nogo, bed, food (eating is normal here), play (chewing toys is fine)
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
 
-ZONE_TYPES = ["trash", "danger", "nogo", "bed"]
+ZONE_TYPES = ["trash", "danger", "nogo", "bed", "food", "play"]
+ZONE_LABELS = {"trash": "Trash", "danger": "Danger", "nogo": "No-go", "bed": "Bed", "food": "Food bowl", "play": "Play area"}
 
 
 @dataclass
@@ -51,6 +53,7 @@ class ZoneEditor:
         self.active = False
         self.current: list = []
         self.type = "trash"
+        self.pending_name = ""                  # optional custom name, e.g. "Sofa"
         self.size = (1280, 720)
 
     def mouse(self, event, x, y, flags, param):
@@ -64,8 +67,11 @@ class ZoneEditor:
 
     def finish(self) -> None:
         if len(self.current) >= 3:
-            n = sum(1 for z in self.zones if z.type == self.type) + 1
-            self.zones.append(Zone(f"{self.type} {n}", self.type, self.current))
+            name = self.pending_name.strip()
+            if not name:
+                n = sum(1 for z in self.zones if z.type == self.type) + 1
+                name = f"{ZONE_LABELS.get(self.type, self.type)} {n}"
+            self.zones.append(Zone(name, self.type, self.current))
         self.current = []
 
     def key(self, k: int) -> bool:
@@ -78,8 +84,27 @@ class ZoneEditor:
             self.current.pop()
         elif k in (ord("x"), ord("X")) and self.zones:
             self.zones.pop()
-        elif ord("1") <= k <= ord("4"):
+        elif ord("1") <= k <= ord("6"):
             self.type = ZONE_TYPES[k - ord("1")]
         else:
             return False
         return True
+
+
+def zone_phrase(z) -> str:
+    """How a zone is said out loud: custom names are used, auto names ("Trash 1") are generic."""
+    auto = re.fullmatch(r"(trash|danger|nogo|bed|food|play|Trash|Danger|No-go|Bed|Food bowl|Play area) ?\d*", z.name or "")
+    name = z.name
+    if z.type == "trash":
+        return "at the trash" if auto else f"at the {name}"
+    if z.type == "danger":
+        return "in the danger zone" if auto else f"in the danger zone ({name})"
+    if z.type == "nogo":
+        return "in a no-go area" if auto else f"on the {name} (no-go area)"
+    if z.type == "bed":
+        return "on the bed" if auto else f"on the {name}"
+    if z.type == "food":
+        return "at the food bowl" if auto else f"at the {name}"
+    if z.type == "play":
+        return "in the play area" if auto else f"in the {name}"
+    return f"in {name}"
